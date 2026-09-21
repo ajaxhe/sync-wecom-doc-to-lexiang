@@ -229,27 +229,28 @@ profiles/
 ```
 
 > 接口**仅有**下列参数：必填 `space_id` / `type` / `files` / `parent_entry_id`；可选 `dry_run` / `conflict_strategy`；
-> `files[]` 元素仅有 `id` / `include_subpages`。**服务端不校验未知字段**（多余字段被静默忽略，不会报错、也不会生效）。
+> `files[]` 元素有 `id`（必填，链接 URL）/ `key`（选填，文档名称，接口设计如此）/ `include_subpages`。**服务端不校验未知字段**（多余字段被静默忽略，不会报错、也不会生效）。
 > 完整参数表与探测方法见 `references/import-api.md`。
 
-**候选字段**（**只有 `id` 必填；其余三个都可省略，省略即取默认值**）
+**候选字段**（**只有 `id` 必填；其余两个都可省略，省略即取默认值**）
 
 - `id`（必填，唯一）：**填用户从企微界面复制到的链接原文**，**原样粘贴、勿手改**（手改一个字符 = 换一个身份 = 重复条目）。形态速查见 `references/wecom-sources.md`。
   - 在线文档 / 智能文档 / 表格 → **完整 URL**（`https://doc.weixin.qq.com/doc/w3_…?scode=…`、`…/smartpage/a1_…?scode=…`），**保留 `?scode=`**；
   - 微盘文件 → **分享链接**（`https://drive.weixin.qq.com/s?k=…`，保留 `?k=`）。2026-09-21 复验：服务端**已直接接受**该形态并以链接本身作为身份，**无需**换成 `file_id`；
   - ⚠️ 裸 `docid`（`w3_…` 等）与裸 `file_id`（`fi…`）**兼容但不推荐**：正常用户从企微界面拿不到，仅在沿用既有固化配置时使用。
-- 以下三个**可省略**（日常用不上，省略即取默认值）：
-  - `key`（默认 `""`）：**身份覆盖值**。默认空 = 用 `id` 原样提交。仅当候选字符串与既有条目**文字不同、又确信是同一资产**时才填（逃生口）。
+- 以下两个**可省略**（省略即取默认值）：
+  - `key`（默认 `""`）：**文档名称**（选填）。接口设计：`id` = 链接 URL（身份），`key` = 文档名称，脚本随请求体 `files[].key` 一并提交。
+    🔴 **Agent 生成 config 时就要填好**（来源：清单文档的链接锚文本 / 文档标题）—— 企微接口**无法通过 URL 反查 doc 类型的文档名称**，错过初始化就没有可靠来源。
+    原字段曾被用作「身份覆盖」逃生口，2026-09-21 用户裁决**删除该语义**：提交给服务端的身份永远是 `id` 原文。
   - `include_subpages`（默认取 `source.include_subpages`，后者默认 `true`）：是否连子页一起导入。
     需要全局关掉子页时，在 `source` 下加一行 `"include_subpages": false`。
-  - `note`（默认 `""`）：本地备注，**不进请求体**（避免污染 `href.id`）。
 
-**脚本构造的请求体**（不含本地字段，**不传 `files[].name`** —— 服务端以企微实际标题为准）：
+**脚本构造的请求体**（不含本地字段；`files[].key` 为文档名称，选填，有值才传）：
 
 ```json
 { "space_id": "<target.space_id>", "type": "wecombot",
   "parent_entry_id": "<target.parent_entry_id>",
-  "files": [{ "id": "<实际提交的 id 字符串>", "include_subpages": true }],
+  "files": [{ "id": "<实际提交的 id 字符串>", "key": "<文档名称，选填，有值才传>", "include_subpages": true }],
   "dry_run": false,
   "conflict_strategy": "skip" }
 ```

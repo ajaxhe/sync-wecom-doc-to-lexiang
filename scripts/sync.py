@@ -164,9 +164,8 @@ _VISIBLE_TOOLS = {}
 CONFIG_TEMPLATE = {
     "_comment": "sync-wecom-doc-to-lexiang profile 配置。含密钥，切勿提交（profiles/ 已 gitignore）。"
                 "候选**只填 id 就够**。可选字段（都可省略，省略即取默认）："
-                "candidates[].key（身份归一覆盖值，默认空）、"
-                "candidates[].include_subpages（默认取 source.include_subpages，后者默认 true）、"
-                "candidates[].note（本地备注，不进请求体）。",
+                "candidates[].key（文档名称，选填，随请求体 files[].key 提交；企微侧无法通过 URL 反查 doc 类型文档名称，尽量在初始化时填好）、"
+                "candidates[].include_subpages（默认取 source.include_subpages，后者默认 true）。",
     "auth": {
         "endpoint": "https://mcp.lexiang-app.com/mcp",
         "mcp_token": "lxmcp_在此填入个人MCP Token",
@@ -811,7 +810,8 @@ def build_plan(cfg, index, lookup=None):
     files, plan = [], []
     for i, c in enumerate(cfg["candidates"], 1):
         c = c or {}
-        submit_raw = str(c.get("key") or c.get("id") or "")
+        # key 只承载文档名称（随 files[].key 提交），绝不参与提交身份；身份永远是 id 原文
+        submit_raw = str(c.get("id") or "")
         kind, label = classify_id(submit_raw)
 
         k = norm(submit_raw)
@@ -822,14 +822,17 @@ def build_plan(cfg, index, lookup=None):
         plan.append({
             "i": i, "result": result, "submit": submit,
             "kind": kind, "label": label,
-            "note": str(c.get("note") or ""),
+            "key": str(c.get("key") or ""),
             "dst": (lookup or {}).get(k),
         })
-        files.append({
+        file_item = {
             "id": submit,
             # 候选级缺失 → 回退全局；全局也缺失 → True（走 .get 而非 [ ]，避免调用方漏填即 KeyError）
             "include_subpages": bool(c.get("include_subpages", cfg.get("include_subpages", True))),
-        })
+        }
+        if c.get("key"):
+            file_item["key"] = str(c["key"])  # 文档名称（选填，接口设计）；空值不传，避免覆盖服务端默认行为
+        files.append(file_item)
     return files, plan
 
 
@@ -840,8 +843,8 @@ def render_plan(plan):
         tips = []
         if p["label"]:
             tips.append("形态 %s" % p["label"])
-        if p["note"]:
-            tips.append(p["note"])
+        if p["key"]:
+            tips.append(p["key"])
         if tips:
             print("        └ %s" % "；".join(tips))
 

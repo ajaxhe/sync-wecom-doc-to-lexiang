@@ -110,8 +110,8 @@
 > `status = {"status": "failed", "failed_reason": "video_content_empty"}` —— 身份命中，但资产内容导入失败。
 > **交付 / 验收时不要用 `MATCHED` 反推「导入成功」**；要看乐享条目自身的 `status`。
 
-> **`key` 字段现在只是「极少数场景」的逃生口**（既有条目原文与手头字符串文字不同、又确信同一资产）。
-> `key` 是**用户显式指令**，不是脚本改写 ID —— 与红线 1 不冲突。
+> **`key` 字段的「身份覆盖」语义已于 2026-09-21 删除**（用户裁决）：`key` 现在是**文档名称**（选填），随请求体 `files[].key` 提交给服务端，
+> 提交身份永远是 `id` 原文。下方幂等实测表里 `probe-x` 那轮「`key` 覆盖」是**历史记录**（当时 key 会替换提交串），现行版本已不支持该用法。
 
 > **2.2.1 换算职责的四次变迁（存档，防止过期文案复活）**：
 > ① A1 时期 —— 要求用户先手工换算、把 `file_id` 固化进 config，脚本拦下分享链接并 `exit 1`；
@@ -394,7 +394,7 @@ WARN: 目标目录存在 2 条同源条目（entry_id: <entry_id_B> (created_at=
 | 轮次 | 结果 |
 |---|---|
 | 第 1 次 `create`（default，3 候选，A1 之前） | `#1 MATCHED` / `#2 MATCHED` / `#3 NEW→失败(非法的 file_id)`；**目录 10 → 10** |
-| `probe-x` `create`（`key` 覆盖，1 候选，A1 之前） | `MATCHED` → `succeed 1/1`；**目录仍 10** |
+| `probe-x` `create`（`key` 覆盖，1 候选，A1 之前；⚠️ 当时 key 还是「身份覆盖」语义，2026-09-21 起已改为文档名称，该用法不复存在） | `MATCHED` → `succeed 1/1`；**目录仍 10** |
 | 第 2 次 `create`（default，重复触发，A1 之前） | 同上；**目录仍 10** |
 | **A1 之后** `dry-run`（default，候选 #3 改为 `file_id`） | **`#1 / #2 / #3 全 MATCHED→复用既有`**；`add_num=0, special_num=3`（服务端口径一致） |
 | **A1 之后** `create`（default） | `succeed 3/3`，`exit 0`；**目录 10 → 10，零新增、零重复** |
@@ -446,7 +446,7 @@ WARN: 目标目录存在 2 条同源条目（entry_id: <entry_id_B> (created_at=
     #1 MATCHED→复用既有       submit=https://doc.weixin.qq.com/doc/w3_AE8…?scode=<scode>
     #2 MATCHED→复用既有       submit=https://doc.weixin.qq.com/smartpage/a1_AC0…?scode=<scode>
     #3 MATCHED→复用既有       submit=fi…
-        └ <候选 note，填了才打>
+        └ <候选 key（文档名称），填了才打>
   将新增 : 0 条（add_num）   已存在 : 3 条（special_num）
   task_id    : <task_id>
   状态       : page_processing   进度 None/3
