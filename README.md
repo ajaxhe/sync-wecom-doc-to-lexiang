@@ -36,6 +36,13 @@ Agent 侧**只做三件事**：① 引导配置 → ② 执行脚本 → ③ 告
 | 盘点「目的端目录里多了或少了几条」 | 目的端增删由接口参数 `conflict_strategy` 决定；源端与目的端的文档都会被编辑删除，**没有「正确条目数」这个概念** |
 | 改写用户给的 ID 字符串 | 手改一个字符 = 换一个身份 = 产生重复条目 |
 
+## 前置条件（先确认，否则导入必失败）
+
+1. **乐享侧「授权配置」已完成** —— 这一步在**乐享页面**上完成，按官方文档操作：
+   <https://lexiangla.com/pages/d4a717fbf4604efea4bd286fdcdac31a?company_from=906ba45e6f9a11f089c57a2a2b4bccb6>
+   （未完成或已过期会让导入任务失败；脚本在 `init` 与各个失败出口都会打印该地址）
+2. 一个乐享 MCP Token —— <https://lexiangla.com/ai/claw>
+
 ## 快速开始
 
 ```bash
@@ -123,6 +130,7 @@ profiles/                 # 运行状态（已 gitignore，绝不提交）
 ## 环境要求
 
 - Python 3（仅标准库）
+- 乐享侧**授权配置已完成**（见上面「前置条件」；本 skill 不做授权、也不代查状态）
 - 一个乐享 MCP Token（<https://lexiangla.com/ai/claw>）
 
 ## 相关

@@ -13,6 +13,7 @@
 | 协议 | JSON-RPC 2.0，`method = tools/call` |
 | 鉴权 | `Authorization: Bearer lxmcp_xxx`（个人 MCP Token，固定不变，适合定时任务） |
 | 获取 token | `https://lexiangla.com/ai/claw` |
+| 🔑 授权配置（前置） | **导入的前置条件**：该乐享企业须在乐享页面完成「授权配置」。**未完成或已过期时，鉴权可能正常、但导入任务失败** —— 按官方文档操作：<https://lexiangla.com/pages/d4a717fbf4604efea4bd286fdcdac31a?company_from=906ba45e6f9a11f089c57a2a2b4bccb6>（本 skill 不做授权、不代查状态、不复述文档内容） |
 
 ### 🔴 调用路径：**先看当前可见 tools 再选路径**（不是平台固定行为，别写死）
 

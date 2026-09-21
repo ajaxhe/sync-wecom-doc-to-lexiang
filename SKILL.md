@@ -1,6 +1,6 @@
 ---
 name: sync-wecom_doc-to-lexiang
-description: 把【企业微信 / 企微】知识库资产（在线文档 doc / smartpage / sheet / smartsheet + 微盘文件）批量、增量地【导入】【同步】到【乐享】知识库指定目录。走乐享 MCP 的 import_create_task / import_describe_task 直连服务端导入任务，服务端自己抓正文、图片与文件，Agent 侧无需读正文、无需上传文件。**候选只能填服务端直接接受的形态**：在线文档 / 智能文档 / 表格贴完整 URL（含 ?scode=），微盘填 file_id（fi… 长串）—— 微盘分享链接不被服务端接受，需先在对话中换成 file_id。本 skill 的职责只有三件事：**引导配置 → 执行脚本 → 告知结果**（不维护任何中间状态、不追踪目的端增删）。首选 scripts/sync.py 脚本（多 profile 隔离、任务 id 缓存、--debug 日志）；resolve 子命令把乐享目录链接解析成 space_id / entry_id（引导配置用，只读不改配置）；**本 skill 不碰企微侧**（不枚举企微候选、不做 ID 换算、不调用任何企微侧工具）。当用户提到企微、企业微信、WeCom、微盘、微盘分享链接、企微知识库、企微文档、乐享、导入、同步、增量导入、批量导入时使用本 skill。profiles/ 含密钥与日志，绝不可提交到代码托管平台。
+description: 把【企业微信 / 企微】知识库资产（在线文档 doc / smartpage / sheet / smartsheet + 微盘文件）批量、增量地【导入】【同步】到【乐享】知识库指定目录。走乐享 MCP 的 import_create_task / import_describe_task 直连服务端导入任务，服务端自己抓正文、图片与文件，Agent 侧无需读正文、无需上传文件。**候选只能填服务端直接接受的形态**：在线文档 / 智能文档 / 表格贴完整 URL（含 ?scode=），微盘填 file_id（fi… 长串）—— 微盘分享链接不被服务端接受，需先在对话中换成 file_id。本 skill 的职责只有三件事：**引导配置 → 执行脚本 → 告知结果**（不维护任何中间状态、不追踪目的端增删）。首选 scripts/sync.py 脚本（多 profile 隔离、任务 id 缓存、--debug 日志）；resolve 子命令把乐享目录链接解析成 space_id / entry_id（引导配置用，只读不改配置）；**本 skill 不碰企微侧**（不枚举企微候选、不做 ID 换算、不调用任何企微侧工具）；**使用前提：该乐享企业已在乐享页面完成「授权配置」**（未完成或已过期会让导入失败）。当用户提到企微、企业微信、WeCom、微盘、微盘分享链接、企微知识库、企微文档、乐享、导入、同步、增量导入、批量导入时使用本 skill。profiles/ 含密钥与日志，绝不可提交到代码托管平台。
 agent_created: true
 ---
 
@@ -90,6 +90,7 @@ python3 scripts/sync.py resolve '<乐享目录链接>'            # 只读：解
 ❌ **反面**：把脚本输出整段抄一遍；或越界汇报「我扫描发现目录里有 3 条 / 之前有 10 条」；或贴 200 行原始回包。
 
 **失败时**才展开，且只给三样：`task_id`、终态、`failed_items[].failed_code` + `failed_reason`。
+若失败与**授权 / 凭证**有关，附一句「导入的前提是乐享侧授权配置有效」+ 文档链接；其余排查一律不展开。
 
 ## 命令
 
@@ -111,6 +112,20 @@ python3 scripts/sync.py resolve '<乐享目录链接>'            # 只读：解
 > 🔴 **脚本在任何命令下都不会改写 `config.json`** —— 只有 `init` 会生成模板，且已存在则不覆盖。
 > 配置的建立与更新**由 Agent 编辑文件完成**。这是硬约束：执行期改配置，会让同一条命令产生不同结果。
 
+### 前置：乐享侧「授权配置」（首次初始化必做，且不在本 skill 职责内）
+
+**导入能跑通的前提：该乐享企业已完成「授权配置」。** 这一步在**乐享页面上由用户完成** ——
+本 skill **不做授权、不代查授权状态、也不复述文档内容**（文档由乐享官方维护）。
+
+| 时机 | Agent 要做的 |
+|---|---|
+| **首次初始化** | 主动提示用户先确认这件事（未完成 → 导入必失败），把文档链接给用户 |
+| **报错** | 鉴权失败、或鉴权通过但导入任务 `failed` —— 都先给用户这篇文档，再谈其它排查 |
+
+授权配置文档：<https://lexiangla.com/pages/d4a717fbf4604efea4bd286fdcdac31a?company_from=906ba45e6f9a11f089c57a2a2b4bccb6>
+
+> 脚本已在 `init` 与各个失败出口（鉴权失败 / 创建任务失败 / 任务 `failed`，含 `dry-run`）打印该文档地址 —— Agent 不必背链接。
+
 ### 要收集的信息（就这 4 项，别多问）
 
 | 信息 | 怎么拿 | 注意 |
@@ -121,6 +136,9 @@ python3 scripts/sync.py resolve '<乐享目录链接>'            # 只读：解
 | ④ MCP Token | 用户从 `https://lexiangla.com/ai/claw` 取 | 只写进 config：**绝不回显、绝不写进报告** |
 
 ### 首次初始化（4 步）
+
+> ⚠️ 动手前先确认「乐享侧授权配置」已完成（见上节）—— 授权未完成 / 已过期时，**配置本身看起来是通的**，
+> 问题要到真跑（或任务失败）才暴露，极易被误判成「配置写错了」。
 
 ```bash
 cd <skill 目录>
@@ -245,7 +263,8 @@ profiles/
 | 任务 `failed` 但 `err_message` 只有一句泛化文案 | 真正原因在 `failed_items[].failed_reason`，脚本已逐条打印。**注意失败项不在 `entries[]` 里**，且部分失败 = 整任务 `failed` |
 | `dry_run_stats` 出现 `None` | 计数为 0 时服务端不回该字段，脚本已归一成 `0` |
 | `create` 跑完**没有** `服务端统计` 一行 | 正常 —— `dry_run_stats` **仅 `dry_run=true` 时才有**（见 `references/import-api.md`），真跑任务不回该字段。定时任务报告里这一项应写「未回传 / 按规则等价 0」，或改用客户端 `候选提交保真清单` 的 `MATCHED→复用既有 / NEW→原样提交` 计数（二者口径不同，别混着说） |
-| 鉴权失败 / 401 | `auth.mcp_token` 无效或过期，从 `https://lexiangla.com/ai/claw` 重新获取 |
+| 鉴权失败 / 401 | 先按 token 处理：`auth.mcp_token` 无效或过期，从 `https://lexiangla.com/ai/claw` 重新获取。**换 token 后仍失败** → 是乐享侧「授权配置」未完成或已过期，把授权文档给用户（见「配置引导」前置节） |
+| 导入任务 `failed`，原因指向**授权**（未完成 / 已过期） | **不要改 config、不要换 token、不要改候选** —— 这是乐享侧的授权问题，不是本 skill 的参数问题。把授权文档给用户，由其在乐享页面完成授权后重跑 |
 | 报 `tool is not allowed: xxx` | **不要改 config、不要换 token** —— 该报错只说明这个工具不在**当前可见 tools** 里（allowlist 过滤），脚本会自动改走 `call_tool` 包装。判凭证是否有效只需直调一次 `whoami`（成功即有效） |
 | 目录扫描失败 | 脚本**主动中止**、不提交任何任务 —— 这是有意的：跳过匹配强行提交会制造重复 |
 | 候选 ID 形态报错 | 见 `references/wecom-sources.md` 的形态表。**推荐填服务端接受的形态**（在线文档 / 智能文档 / 表格完整 URL、微盘 `file_id`）；`sheet`/`smartsheet` 及 `w3_`/`a1_`/`b1_` 之外的裸 docid 前缀属「按路径推断、未实测」 |

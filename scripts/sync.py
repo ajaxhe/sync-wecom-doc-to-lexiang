@@ -6,6 +6,11 @@ sync-wecom_doc-to-lexiang —— 把企微知识库资产（在线文档 + 微�
 零第三方依赖（仅 Python 标准库，不需要装任何 pip 包）。
 多 profile 隔离：profiles/<name>/{config.json,.task_id.cache,sync.log}。
 
+前置条件（都在乐享侧完成，本脚本只指路、不代劳）：
+    · 该乐享企业/账号已完成「授权配置」—— 导入能跑通的前提；未完成或已过期会让导入失败。
+      授权文档：https://lexiangla.com/pages/d4a717fbf4604efea4bd286fdcdac31a?company_from=906ba45e6f9a11f089c57a2a2b4bccb6
+    · config.json 已填该账号 MCP Token（获取：https://lexiangla.com/ai/claw）。
+
 用法：
     python3 scripts/sync.py init    [--profile NAME]              # 生成 profile 配置模板 + profiles/.gitignore
     python3 scripts/sync.py list                                  # 列出全部 profile 及配置就绪状态
@@ -131,6 +136,14 @@ CALL_TOOL = "call_tool"
 # 覆盖为自己租户的地址，例如 https://<你的租户>.lexiangla.com
 DEFAULT_LEXIANG_ORIGIN = os.environ.get("LEXIANG_ORIGIN", "https://lexiangla.com").rstrip("/")
 
+# MCP Token 获取页（乐享 AI 页面）。
+TOKEN_URL = "https://lexiangla.com/ai/claw"
+
+# 乐享侧「授权配置」官方文档 —— **导入的前置条件**：未完成或已过期会让导入任务失败。
+# ⚠️ 这是**对外公开的产品文档链接**，不是本机/个人资源：skill 发布到代码托管平台时**保留**，
+#    脱敏扫描请把本常量列入白名单（URL 里的 32 位串是文档 entry_id 与该企业的 company_from 参数）。
+AUTH_DOC_URL = "https://lexiangla.com/pages/d4a717fbf4604efea4bd286fdcdac31a?company_from=906ba45e6f9a11f089c57a2a2b4bccb6"
+
 # 进程内缓存：{endpoint: frozenset(可见工具名)}。探测失败记 None → 退回「包装→直调」回退链。
 _VISIBLE_TOOLS = {}
 
@@ -194,6 +207,19 @@ def _mask_token(token):
     if len(token) <= 12:
         return token[:4] + "***"
     return token[:10] + "***" + token[-4:]
+
+
+def print_auth_hint(stream=None, indent="  "):
+    """打印「去乐享页面完成授权」的引导 —— 全脚本**唯一出口**（避免同一段文案在多处漂移）。
+
+    由调用方决定时机：init（首次初始化）、鉴权 / 授权类失败、创建任务失败、导入任务 failed。
+    本 skill **不做授权、也不代查授权状态**，只把乐享官方文档指给用户；也**不复述文档内容** ——
+    文档由乐享官方维护，复述会随其更新而失真。
+    """
+    out = sys.stderr if stream is None else stream
+    print("%s授权提示   : 导入的前置条件是在乐享页面完成「授权配置」；若尚未完成或已过期，"
+          "按此文档操作 ——" % indent, file=out)
+    print("%s             %s" % (indent, AUTH_DOC_URL), file=out)
 
 
 def debug_log(ctx, *lines):
@@ -368,7 +394,7 @@ def load_config(ctx):
     joined = token + space_id + parent + json.dumps(candidates, ensure_ascii=False)
     if "在此填入" in joined or not token or not space_id or not parent:
         print("profile 「%s」的 config.json 仍是初始化模板：请填 auth.mcp_token / source.candidates / target 后再运行。\n"
-              "获取 token：https://lexiangla.com/ai/claw" % ctx.profile, file=sys.stderr)
+              "获取 token：%s" % (ctx.profile, TOKEN_URL), file=sys.stderr)
         sys.exit(1)
 
     if not candidates:
@@ -466,7 +492,12 @@ def _rpc_post(ctx, cfg, payload, path):
         body = e.read().decode("utf-8", "ignore")
         debug_log(ctx, "[%s] <<< HTTP ERROR code=%s" % (_now(), e.code), "--- 错误回包 ---", body)
         if e.code in (401, 403):
-            raise AuthError("乐享鉴权失败（HTTP %s）。请在 config.json 更新 auth.mcp_token" % e.code)
+            raise AuthError(
+                "乐享鉴权失败（HTTP %s）。\n"
+                "  · 先在 config.json 更新 auth.mcp_token（重新获取：%s）。\n"
+                "  · 若更新后仍失败，可能是乐享侧「授权配置」未完成或已过期 —— "
+                "按此文档在乐享页面完成授权：\n"
+                "    %s" % (e.code, TOKEN_URL, AUTH_DOC_URL))
         raise RuntimeError("调用乐享 MCP 失败：HTTP %s %s" % (e.code, body[:300]))
     except AuthError:
         raise
@@ -539,7 +570,12 @@ def _mcp_post(ctx, cfg, tool_name, arguments, req_id, path="meta"):
         msg = str(inner.get("message") or "")
         low = msg.lower()
         if "unauthorized" in low or "invalid token" in low or inner.get("code") in (401, 403):
-            raise AuthError("乐享鉴权失败（token 无效或过期）。请在 config.json 更新 auth.mcp_token")
+            raise AuthError(
+                "乐享鉴权失败（token 无效或过期）。\n"
+                "  · 先在 config.json 更新 auth.mcp_token（重新获取：%s）。\n"
+                "  · 若更新后仍失败，可能是乐享侧「授权配置」未完成或已过期 —— "
+                "按此文档在乐享页面完成授权：\n"
+                "    %s" % (TOKEN_URL, AUTH_DOC_URL))
         return inner
     if isinstance(result.get("structuredContent"), dict):
         return {"code": 0, "data": result["structuredContent"]}
@@ -788,7 +824,8 @@ def do_init(ctx):
             json.dump(CONFIG_TEMPLATE, f, ensure_ascii=False, indent=2)
         print("已创建 profile 「%s」：%s" % (ctx.profile, ctx.config_path))
         print("请编辑该文件，填入 auth.mcp_token / source.candidates / target 后再运行 create。")
-        print("获取 mcp_token：访问 https://lexiangla.com/ai/claw")
+        print("获取 mcp_token：访问 %s" % TOKEN_URL)
+        print_auth_hint(stream=sys.stdout, indent="")
     print("提示：profiles/ 已写入 .gitignore，切勿提交到任何代码托管平台。")
 
 
@@ -865,6 +902,7 @@ def _submit_and_poll(ctx, cfg, files, dry_run, wait):
         return None, 1
     if resp.get("code") != 0:
         print("创建任务失败：%s" % json.dumps(resp, ensure_ascii=False)[:400], file=sys.stderr)
+        print_auth_hint()
         return None, 1
     task_id = (resp.get("data") or {}).get("task_id")
     if not task_id:
@@ -931,6 +969,8 @@ def do_dry_run(ctx, cfg):
         return rc
     render_entries(data)
     render_failures(data)
+    if (data.get("status") or "").strip() == "failed":
+        print_auth_hint()
     return 0
 
 
@@ -966,6 +1006,7 @@ def do_create(ctx, cfg, wait=True):
         n_fail = len(data.get("failed_items") or [])
         print("导入任务失败：%s（总计 %s 条，其中 %s 条未成功 —— 逐条原因见上「未成功项」）"
               % (data.get("err_message") or "(无)", total, n_fail), file=sys.stderr)
+        print_auth_hint()
         return 1
     return 0
 
@@ -989,6 +1030,7 @@ def do_status(ctx, cfg):
     render_failures(data)
     if status == "failed":
         print("导入任务失败：%s" % (data.get("err_message") or "(无)"), file=sys.stderr)
+        print_auth_hint()
         return 1
     return 0
 
