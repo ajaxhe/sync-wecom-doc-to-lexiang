@@ -64,6 +64,12 @@ MCP 调用路径（走哪条**由当前可见 tools 决定**，不遵守会让�
    0. **脚本不做任何判断逻辑** —— 不预判候选能不能导入、不按类型拦截、不因「形态不认识」而中止。
       候选**原样提交**，服务端怎么判就怎么回传；接口的**原始信息与错误**交回给 Agent 组织话术。
       ⚠️ 严禁把「某类型不可导入 / 已实测 / 未实测」这类**我们的推断**写回代码（历史教训见 pitfalls.md §2.4）。
+      ⚠️ **免升级设计（不可违反）**：接口将来支持**新的文档类型**时，本 skill **必须不改一行就能用** ——
+         用户更新 skill 是**不确定行为**，不能把「支持新类型」寄托在用户升级上。
+         ⇒ 任何**按文档类型分叉**的硬编码（白名单 / 黑名单 / 类型→参数映射 / 形态禁入表）都是违规：
+           脚本对候选只做「原样提交」；`_ID_RULES` 只产出**报告标签**，不命中就走 `_GENERIC_LABEL_RX` 兜底；
+           `norm()` 只按「噪声 query 键」归一、**不按 host/类型特判**。
+           真要新增类型支持，那是**接口**的事，不是本 skill 的事。
    1. 脚本绝不改写**待提交**的 ID 字符串（剥 query、URL↔裸 id 互转 → 制造重复条目）。
       候选一律**原样提交**（命中归一索引时回填既有原串，仍不改一个字符）。
    2. norm() 仅供客户端匹配判等，绝不回传给服务端。
@@ -260,15 +266,29 @@ def _lower_host(s):
     return m.group(1).lower() + m.group(2).lower() + m.group(3)
 
 
+# 归一时**剥掉**的 query 键 —— 它们是「同一次分享的票据 / 来源标记」，同一份资产在不同人手上
+# 取值不同，留着会让**同一份资产**被算成两个身份（→ 目的端重复条目）。
+# ⚠️ 这是**归一动作**，不是「支持性判断」：加键 = 匹配更准；加错也不会阻断任何提交 ——
+#   匹配不上就退化成 `NEW→原样提交`，仍由服务端判定。
+# ⚠️ 反过来，**除这些之外的所有 query 键一律保留**（见 norm ②）。
+NOISE_QUERY_KEYS = frozenset(["scode"])
+
+
 def norm(raw):
     """归一规则（**仅供客户端判等**，绝不回传给服务端）：
 
     ① 去首尾空白（含从聊天窗口复制带进来的 \\n / 空格）；
-    ② 剥 `?...` query（scode / from 等）；
+    ② 剥掉落在 `NOISE_QUERY_KEYS` 里的**噪声** query 键（每份分享各不相同的 `scode` 等），
+       **其余 query 键全部保留** —— 否则「身份写在 query 里」的形态会被误判成同一份资产；
     ③ **保留** `#page=<pageId>` fragment —— include_subpages 下智能文档每个子页是独立子条目，
        href.id 形如 `…/smartpage/a1_xxx#page=<pageId>`，fragment 是身份锚点，剥了会错配；
-    ④ 微盘分享链接 `s?k=<k>` —— 身份本体是 k，**保留 k**；
-    ⑤ host 小写，path / id 大小写不改写。
+    ④ host 小写，path / id / 剩余 query 大小写一律不改写。
+
+    🔴 **免升级设计（2026-09-21）**：本函数**不按 host / 文档类型做特判**。
+       历史上这里有一条「微盘 `drive.weixin.qq.com/s` → 保留 `k`」的**形态特判**，
+       现已由 ② 的通用规则取代（`k` 不在噪声表里 → 自动保留，输出与特判逐字节一致）。
+       ⇒ **接口将来新增任何文档类型 / 新的链接形态，都不需要改这里**
+         （只要它的身份不落在噪声表里 —— 那本来就该被当成「同一份资产」）。
     """
     s = (raw or "").strip()
     if not s:
@@ -283,13 +303,16 @@ def norm(raw):
     else:
         base, query = base, ""
 
+    kept = []
+    for part in query.split("&"):
+        if not part:
+            continue
+        if part.split("=", 1)[0].lower() in NOISE_QUERY_KEYS:
+            continue
+        kept.append(part)
+
     base_l = _lower_host(base)
-    # ④ 微盘分享链接：保留 k
-    if "drive.weixin.qq.com/s" in base_l and base_l.rstrip("/").endswith("/s"):
-        m = re.search(r"(?:^|&)k=([^&\s]+)", query)
-        if m:
-            return "https://drive.weixin.qq.com/s?k=" + m.group(1) + frag
-    return base_l + frag
+    return base_l + (("?" + "&".join(kept)) if kept else "") + frag
 
 
 # ==========================================================================
@@ -303,6 +326,9 @@ def norm(raw):
 #     由 Agent 负责组织成给用户的话术；
 #   · 因此这里**没有**「已实测 / 未实测 / 不可导入 / 拒收」这类结论，也**不得**再把
 #     任何「类型支持性」的判断加回来；识别不出形态也**照原样提交**，不阻断、不预判。
+# 🔴 **免升级设计**：接口将来新增文档类型时，本表**不需要**跟着加行 —— 没命中的 URL 会由
+#   `_GENERIC_LABEL_RX` 兜底产出一个可读标签。本表存在的意义只是「让常见形态的标签更顺眼」，
+#   **它不是白名单**；任何「不在表里就拒收 / 打未实测标记」的写法都属违规。
 _ID_RULES = [
     ("wecom_doc_url", re.compile(r"^https?://doc\.weixin\.qq\.com/doc/[A-Za-z0-9_\-]+", re.I),
      "企微在线文档 URL（/doc/）"),
@@ -320,6 +346,12 @@ _ID_RULES = [
     ("wecom_bare_id", re.compile(r"^[a-z][0-9]_[A-Za-z0-9_\-]+$"),
      "裸 docid"),
 ]
+
+# 兜底标签（**免升级设计**）：URL 没命中上面任何一条时，用它从 URL 自身拼一个可读标签。
+# 目的：接口将来支持某个**当前还不存在的文档类型**（新路径 / 新 host）时，
+#       报告里照样能写清「这条是什么链接」，**不需要改本文件**。
+# ⚠️ 它**只**产出标签 —— 不参与匹配、不参与提交、不参与任何「能不能导入」的判断。
+_GENERIC_LABEL_RX = re.compile(r"^https?://([^/?\s]+)(/[^?#\s]*)?", re.I)
 
 ID_SHAPE_HINT = (
     "候选请填**源端链接原文**并**原样粘贴**"
@@ -359,8 +391,13 @@ DEFAULT_CONFLICT_STRATEGY = "skip"
 def classify_id(raw):
     """返回 (kind, label)——**仅用于报告里给人读的形态标签**，不参与提交与否的判断。
 
-    识别不出返回 (None, None)，调用方**照原样提交**（不阻断、不预判、不换算）。
-    绝不在此处判断「服务端收不收 / 能不能导入」—— 那是接口的事。
+    · 命中 `_ID_RULES` → `(kind, 人话标签)`；
+    · 是 URL 但没命中 → `(None, "URL（host/首段）")` —— 形态表**不参与拦截**，
+      接口将来新增文档类型时这里**照旧给出可读标签、无需改代码**（见 `_GENERIC_LABEL_RX`）；
+    · 其余 → `(None, None)`。
+
+    调用方一律**照原样提交**（不阻断、不预判、不换算）。绝不在此处判断「服务端收不收 /
+    能不能导入」—— 那是接口的事。
     """
     s = (raw or "").strip()
     if not s:
@@ -368,6 +405,10 @@ def classify_id(raw):
     for kind, rx, label in _ID_RULES:
         if rx.match(s):
             return kind, label
+    m = _GENERIC_LABEL_RX.match(s)
+    if m:
+        seg = (m.group(2) or "").strip("/").split("/")[0]
+        return None, "URL（%s%s）" % (m.group(1), ("/" + seg) if seg else "")
     return None, None
 
 
