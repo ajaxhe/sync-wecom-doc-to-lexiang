@@ -1,6 +1,6 @@
 ---
 name: sync-wecom-doc-to-lexiang
-description: 把【企业微信 / 企微】知识库资产（在线文档 doc / smartpage / sheet / smartsheet + 微盘文件）批量、增量地【导入】【同步】到【乐享】知识库指定目录。走乐享 MCP 的 import_create_task / import_describe_task 直连服务端导入任务，服务端自己抓正文、图片与文件，Agent 侧无需读正文、无需上传文件。**候选只能填服务端直接接受的形态**：在线文档 / 智能文档 / 表格贴完整 URL（含 ?scode=），微盘填 file_id（fi… 长串）—— 微盘分享链接不被服务端接受，需先在对话中换成 file_id。本 skill 的职责只有三件事：**引导配置 → 执行脚本 → 告知结果**（不维护任何中间状态、不追踪目的端增删）。首选 scripts/sync.py 脚本（多 profile 隔离、任务 id 缓存、--debug 日志）；resolve 子命令把乐享目录链接解析成 space_id / entry_id（引导配置用，只读不改配置）；**本 skill 不碰企微侧**（不枚举企微候选、不做 ID 换算、不调用任何企微侧工具）；**使用前提：该乐享企业已在乐享页面完成「授权配置」**（未完成或已过期会让导入失败）。当用户提到企微、企业微信、WeCom、微盘、微盘分享链接、企微知识库、企微文档、乐享、导入、同步、增量导入、批量导入时使用本 skill。profiles/ 含密钥与日志，绝不可提交到代码托管平台。
+description: 把【企业微信 / 企微】知识库资产（在线文档 doc / smartpage / sheet / smartsheet + 微盘文件）批量、增量地【导入】【同步】到【乐享】知识库指定目录。走乐享 MCP 的 import_create_task / import_describe_task 直连服务端导入任务，服务端自己抓正文、图片与文件，Agent 侧无需读正文、无需上传文件。**候选只填源端链接原文、原样粘贴**：在线文档 / 智能文档 / 表格贴完整 URL（含 ?scode=），微盘贴分享链接（`https://drive.weixin.qq.com/s?k=…` 含 ?k=，2026-09-21 实测服务端已直接接受）—— **不要**把链接换成 docid / file_id 等任何 ID。本 skill 的职责只有三件事：**引导配置 → 执行脚本 → 告知结果**（不维护任何中间状态、不追踪目的端增删）。首选 scripts/sync.py 脚本（多 profile 隔离、任务 id 缓存、--debug 日志）；resolve 子命令把乐享目录链接解析成 space_id / entry_id（引导配置用，只读不改配置）；**本 skill 不碰企微侧**（不枚举企微候选、不做 ID 换算、不调用任何企微侧工具）；**使用前提：该乐享企业已在乐享页面完成「授权配置」**（未完成或已过期会让导入失败）。当用户提到企微、企业微信、WeCom、微盘、微盘分享链接、企微知识库、企微文档、乐享、导入、同步、增量导入、批量导入时使用本 skill。profiles/ 含密钥与日志，绝不可提交到代码托管平台。
 agent_created: true
 ---
 
@@ -22,10 +22,10 @@ Agent 侧**只做三件事**：① **引导配置**（帮用户把 `config.json`
 | 汇报 / 追踪「目的端目录里多了或少了几条」 | 目的端增删是**接口参数** `conflict_strategy` 的职责。源端与目的端的文档都会被编辑删除，**没有"正确条目数"这个概念**，不必盘点、不必对账 |
 | 维护本地「已同步清单」/ manifest / 快照 | 增删与去重由接口自行处理，**本 skill 不维护任何本地同步状态**。不要建、不要读、不要修 |
 | 替用户决定「该不该覆盖目的端」 | 把「冲突处理策略」表讲清楚让用户选。**默认 `skip`**；Agent 不要自行改成 `replace` |
-| 解析 / 改写企微或乐享的 ID | 见红线 1。用户给的标识（在线文档 URL / 微盘 `file_id`）**原样写进 config 即可**，不改一个字符 |
+| 解析 / 改写企微或乐享的 ID | 见红线 1。用户给的标识（在线文档 URL / 微盘分享链接）**原样写进 config 即可**，不改一个字符；**不要**换成 docid / file_id |
 | 在报告里复述脚本已打印的原始回包 | 用户要的是**结论**（见「回复模板」）。回包只在**失败排障**时贴，且只贴 `failed_items` |
 | 读企微正文 / 下载文件 / 转存图片 | **服务端自己抓**，Agent 侧不碰内容 |
-| 查企微侧（枚举候选、把分享链接换成 `file_id`） | **本 skill 不碰企微侧** —— 不调用任何企微侧工具，避免把「本机装没装某工具」变成隐式前置条件。需要换算时由 Agent 在**对话中**引导完成（见 `references/wecom-sources.md` §2） |
+| 查企微侧枚举候选、做任何 ID 换算 | **本 skill 不碰企微侧** —— 不调用任何企微侧工具，避免把「本机装没装某工具」变成隐式前置条件。候选只放**源端链接原文**，链接与 ID 的互转在本链路**不需要** |
 | 研究企微 MCP / uaKey / apikey | 与本链路无关（走的是乐享 MCP） |
 | 做本地控制台 / Web 界面 | 超出本 skill 范围 |
 
@@ -39,7 +39,11 @@ Agent 侧**只做三件事**：① **引导配置**（帮用户把 `config.json`
 3. 🔴 **绝不 `scp` / 覆盖 `profiles/*/config.json`**（含个人 MCP Token）；不得把 token 写进 SKILL.md / references / 任何输出。
 4. 🔴 **禁止 mock / 占位假数据**：直连真实 MCP 端点；凭证缺失时报明确错误并 `exit 1`，**不降级 mock**。
 5. 🔴 **回包 `code:0` ≠ 成功**：`create` 返回 task_id 只代表任务已创建，成败必须轮询 `import_describe_task`。
-6. 🔴 **候选 id 只能是服务端直接接受的形态**：在线文档 / 智能文档 / 表格**完整 URL**（含 `?scode=`）、微盘 **`file_id`**（`fi…` 长串）。**分享链接一律拒收**（服务端实测 `failed_reason`「非法的 'file_id'」），须先在**对话中**换成 `file_id` 再填 —— 本 skill 不做这一步，也不得把「脚本会自动换算」写进任何文档或交付话术。
+6. 🔴 **候选只填源端链接原文**：在线文档 / 智能文档 / 表格**完整 URL**（含 `?scode=`）、微盘**分享链接**（`https://drive.weixin.qq.com/s?k=…`，含 `?k=`）。
+   **不做任何 ID 换算** —— 链接 ↔ docid / file_id 的互转、剥离 query 参数，服务端都会判成**另一个身份**（→ 目的端重复条目）；
+   且这是多余动作：2026-09-21 复验**服务端已直接接受微盘分享链接**（新建条目 `source.href.id` = 分享链接原文）。
+   （历史：2026-09-20 曾实测该形态被拒 —— 结论已过期，见 `references/pitfalls.md` §2.2 的变迁记录。）
+   另：`…/sheet/` 链接**仍被服务端拒收**（2026-09-21 实测两次，`failed_reason`「非法的 'file_id'」）—— 照实提交并如实报告该条失败，**不要**为了让它通过去改写形态。
 7. 🔴 **必须显式下发 `conflict_strategy`（脚本已内置，默认 `skip`），绝不依赖服务端默认** ——
    实测（2026-09-20）：**不传该字段时，一次 `create` 把目标目录原有 10 条条目（含 7 条与本批候选无关的）裁成本次提交的 3 条**。
    另：**`dry-run` 对该策略是盲的**（不传 / replace / skip / keep_both 四路 `dry_run_stats` 实测完全一致），
@@ -150,7 +154,7 @@ python3 scripts/sync.py resolve '<乐享目录链接>'            # 只读：解
 | 信息 | 怎么拿 | 注意 |
 |---|---|---|
 | ① 乐享**目标目录**链接 | 让用户从乐享页面复制（`https://<租户>.lexiangla.com/pages/<32位id>`） | **只问链接，不要问 `space_id`** —— 用 `resolve` 自动解析 |
-| ② 要同步的**企微资产**标识 | 在线文档 / 智能文档 / 表格：从企微界面复制**完整 URL**（含 `?scode=`）；微盘：`file_id`（`fi…`）。**用户若给的是分享链接**，先在对话中换成 `file_id`（本 skill 不做，做法见 `references/wecom-sources.md` §2） | 一条一个，**原样粘贴不要手改** |
+| ② 要同步的**企微资产**标识 | 在线文档 / 智能文档 / 表格：从企微界面复制**完整 URL**（含 `?scode=`）；微盘：复制**分享链接**（`https://drive.weixin.qq.com/s?k=…`，含 `?k=`） | 一条一个，**原样粘贴不要手改**（不要换成 docid / file_id） |
 | ③ 冲突策略 | 默认 `skip`；只解释差异，不替用户决定 | 目标目录里若还有别的内容，`replace` 会删掉它们 |
 | ④ MCP Token | 用户从 `https://lexiangla.com/ai/claw` 取 | 只写进 config：**绝不回显、绝不写进报告** |
 
@@ -171,7 +175,7 @@ python3 scripts/sync.py resolve '<用户给的乐享目录链接>'
 # ③ Agent 编辑 profiles/<任务名>/config.json：
 #    auth.mcp_token ← 用户给的 token
 #    target         ← 上一步打印的那段（含 space_id / parent_entry_id）
-#    source.candidates ← 用户给的标识，一条一个 { "id": "…" }（微盘必须是 file_id）
+#    source.candidates ← 源端链接原文，一条一个 { "id": "…" }（微盘填分享链接，原样）
 
 # ④ 校验配置（不写库）
 python3 scripts/sync.py dry-run --profile <任务名>
@@ -214,7 +218,7 @@ profiles/
     "candidates": [
       { "id": "https://doc.weixin.qq.com/doc/w3_…?scode=…" },
       { "id": "https://doc.weixin.qq.com/smartpage/a1_…?scode=…", "include_subpages": false },
-      { "id": "fi…" }                              // 微盘 file_id（分享链接不被服务端接受）
+      { "id": "https://drive.weixin.qq.com/s?k=…" }   // 微盘分享链接，原样粘贴（服务端已直接接受）
     ]
   },
   "target": {
@@ -233,7 +237,7 @@ profiles/
 
 - `id`（必填，唯一）：**填服务端直接接受的形态**，**原样粘贴，勿手改**（手改一个字符 = 换一个身份 = 重复条目）。形态表见 `references/wecom-sources.md`。
   - 在线文档 / 智能文档 / 表格 → **完整 URL**（`https://doc.weixin.qq.com/doc/w3_…?scode=…`、`…/smartpage/a1_…?scode=…`），**保留 `?scode=`**；
-  - 微盘文件 → **`file_id`**（`fi…` 长串）。⚠️ 分享链接（`https://drive.weixin.qq.com/s?k=…`）**被服务端拒收**，须先换成 `file_id`（本 skill 不代换，见 `references/wecom-sources.md` §2）；
+  - 微盘文件 → **分享链接**（`https://drive.weixin.qq.com/s?k=…`，保留 `?k=`）。2026-09-21 复验：服务端**已直接接受**该形态并以链接本身作为身份，**无需**换成 `file_id`；
   - ⚠️ 裸 `docid`（`w3_…` 等）与裸 `file_id`（`fi…`）**兼容但不推荐**：正常用户从企微界面拿不到，仅在沿用既有固化配置时使用。
 - 以下三个**可省略**（日常用不上，省略即取默认值）：
   - `key`（默认 `""`）：**身份覆盖值**。默认空 = 用 `id` 原样提交。仅当候选字符串与既有条目**文字不同、又确信是同一资产**时才填（逃生口）。
@@ -278,7 +282,7 @@ profiles/
 | 现象 | 处理 |
 |---|---|
 | 仍出现重复条目 | 读 `references/pitfalls.md`。文档类多为「同一资产混用了两种形态」（带 `?scode=` 的 URL / 剥掉 query 的 URL / 裸 docid 三者互不相等） |
-| 候选写了微盘分享链接 | 脚本会**直接中止**（`exit 1`）并打印指引 —— 分享链接不被服务端接受。需先在**对话中**换成 `file_id`（本 skill 不做这一步）再填进 config |
+| 候选写了微盘分享链接 | **正常形态，直接放行**（2026-09-21 复验服务端已接受，原样提交即可）。**不要**换成 `file_id` —— 那是多余动作，且两者互不相等会造出重复条目 |
 | 任务 `failed` 但 `err_message` 只有一句泛化文案 | 真正原因在 `failed_items[].failed_reason`，脚本已逐条打印。**注意失败项不在 `entries[]` 里**，且部分失败 = 整任务 `failed` |
 | `dry_run_stats` 出现 `None` | 计数为 0 时服务端不回该字段，脚本已归一成 `0` |
 | `create` 跑完**没有** `服务端统计` 一行 | 正常 —— `dry_run_stats` **仅 `dry_run=true` 时才有**（见 `references/import-api.md`），真跑任务不回该字段。定时任务报告里这一项应写「未回传 / 按规则等价 0」，或改用客户端 `候选提交保真清单` 的 `MATCHED→复用既有 / NEW→原样提交` 计数（二者口径不同，别混着说） |
@@ -293,5 +297,5 @@ profiles/
 | 文件 | 内容 | 什么时候读 |
 |---|---|---|
 | `references/import-api.md` | **接口参数全表**（4 必填 + 2 可选 + `files[]` 元素字段 + 校验行为 + 非法值探测方法）、**MCP 调用路径（按可见 tools 选路，2026-09-21 实测）**、去重语义、`dry_run_stats`、异步时序、四条实测口径（`err_message` / `failed_items` / 部分失败 / 计数为 0 不回字段）、**⭐ 报告能取到什么（哪些维度接口没有）**、`entry_list_children` 分页 | 要改接口调用时 / 要动报告字段时 |
-| `references/wecom-sources.md` | 企微链接形态表（哪些服务端接受）、**分享链接 → `file_id` 的对话内换法**（本 skill 不做）、不在白名单的 5 类 `doc_url` 前缀、docid 前缀实测 | 要确认某个企微链接形态合不合法 / 用户给了分享链接 |
+| `references/wecom-sources.md` | 企微链接形态表（**哪些服务端接受、哪些被拒**，含 2026-09-21 微盘分享链接结论翻转）、**候选清单托管在企微文档里时的抽取与过滤**（原样抽链接、不做 ID 换算）、不在白名单的 5 类 `doc_url` 前缀、docid 前缀实测 | 要确认某个企微链接形态合不合法 / 候选来自一篇企微清单文档 |
 | `references/pitfalls.md` | 红线 + 已知限制（含索引只扫一层、未实测形态清单）+ **输出样例与实现约束** + 实测现场记录 | 动 `norm()` 或索引逻辑前**必读**；排查「为什么重复了 / 为什么没匹配上 / 为什么任务 failed」 |

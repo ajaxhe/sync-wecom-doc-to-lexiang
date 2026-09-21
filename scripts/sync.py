@@ -39,10 +39,11 @@ MCP 调用路径（走哪条**由当前可见 tools 决定**，不遵守会让�
 
 候选 id 填什么（**只能填服务端直接接受的形态**）：
     · 企微在线文档 / 智能文档 / 表格 → **原始链接**：`https://doc.weixin.qq.com/...` 整条粘贴（含 `?scode=`）。
-    · 微盘文件 → `file_id`（`fi…` 长串）。
-    · 微盘分享链接（`https://drive.weixin.qq.com/s?k=…`）**不被服务端接受**，本脚本也**不做换算** ——
-      识别到即中止并给出指引；需先在**对话中**把它换成 `file_id` 再填进候选。
-    · 裸 docid / 裸 file_id 也能识别，但**不推荐**：正常用户从企微界面拿不到 docid。
+    · 微盘文件 → **分享链接**：`https://drive.weixin.qq.com/s?k=…` 整条粘贴（含 `?k=`）。
+      2026-09-21 复验：服务端**直接接受**该形态并以链接本身作为身份，**无需**也不应换成 `file_id`。
+    · 裸 docid / 裸 file_id 也能识别，但**不推荐**：正常用户从企微界面拿不到
+      （且与链接形态互不相等，混用会在目的端产生重复条目）。
+    · **链接 ↔ ID 的任何互转、剥离 query 参数，都是多余动作**，一律不做。
 
 冲突处理策略（服务端字段 `conflict_strategy`，本脚本**一律显式下发**，默认 `skip`）：
     · skip      = 跳过已存在的（**默认、安全档**：不改动目的端既有条目）
@@ -64,8 +65,8 @@ MCP 调用路径（走哪条**由当前可见 tools 决定**，不遵守会让�
       候选一律**原样提交**（命中归一索引时回填既有原串，仍不改一个字符）。
    2. norm() 仅供客户端匹配判等，绝不回传给服务端。
    3. **本 skill 不碰企微侧**：不枚举企微候选、不做 ID 换算、不调用任何企微侧工具。
-      候选必须是服务端直接接受的形态；微盘分享链接一律拒收（exit 1）并给出「先换 file_id」的指引，
-      绝不猜测、绝不代跑 —— 需要转换时由 Agent 在**对话中**引导完成。
+      候选一律填**源端链接原文**；链接与 ID 的互转在服务端侧不发生，在脚本侧也**不做** ——
+      用户能拿到的形态（链接）就是唯一推荐形态。
 
 ⚠️ 安全：profiles/ 含密钥（config.json 的 mcp_token）与日志，绝不可提交到任何代码/skill 托管平台。
 """
@@ -168,8 +169,8 @@ CONFIG_TEMPLATE = {
         "conflict_strategy": "skip",
         "candidates": [
             {
-                "id": "在此填入服务端直接接受的形态（在线文档 https://doc.weixin.qq.com/... 整条粘贴；"
-                      "微盘 file_id fi… 长串。分享链接不被服务端接受，需先换成 file_id）",
+                "id": "在此填入源端链接原文（在线文档 https://doc.weixin.qq.com/... 整条粘贴；"
+                      "微盘分享链接 https://drive.weixin.qq.com/s?k=… 整条粘贴。原样照抄，不要换成任何 ID）",
             }
         ],
     },
@@ -318,20 +319,23 @@ _ID_RULES = [
 ]
 
 ID_SHAPE_HINT = (
-    "推荐填服务端直接接受的形态：企微在线文档 / 智能文档 / 表格 URL（`https://doc.weixin.qq.com/...` 整条粘贴，含 ?scode=）、"
-    "微盘 file_id（fi… 长串）。"
-    "微盘分享链接（`https://drive.weixin.qq.com/s?k=…`）不被服务端接受，本脚本不做换算，需先换成 file_id；"
-    "裸 docid（w3_ / a1_ 等）也接受，但正常用户从企微界面拿不到，不推荐"
+    "推荐填源端链接原文，且**原样粘贴**：企微在线文档 / 智能文档 / 表格 URL"
+    "（`https://doc.weixin.qq.com/...` 整条，含 ?scode=）、微盘分享链接"
+    "（`https://drive.weixin.qq.com/s?k=…` 整条，含 ?k=）。"
+    "微盘 file_id（fi… 长串）与裸 docid（w3_ / a1_ 等）也接受，但正常用户从企微界面拿不到，不推荐；"
+    "**链接 ↔ ID 的互转、剥离 ?scode=/?k= 都会让服务端判成另一个身份**，故一律不做"
 )
 
 # 按同一 provider 路径推断、但本次未实测的形态 —— 必须显式提示，不能把推断当事实
 UNVERIFIED_KINDS = {"wecom_sheet_url", "wecom_smartsheet_url", "wecom_bare_id_other"}
 
-# 服务端**实测拒收**、且本 skill **不做**任何企微侧查询与换算的形态：
-# 识别出来只为给一条明确指引，绝不放行到提交阶段。
-# 微盘分享链接实测被拒（任务 failed，failed_reason = 非法的 'file_id' …，详见 references/pitfalls.md §2.3）——
-# 需**先在对话中**把它换成 file_id，再写进候选（本 skill 不代跑这一步）。
-REJECTED_KINDS = {"wecom_disk_share_url"}
+# 服务端**实测拒收**的形态：识别出来只为给一条明确指引，绝不放行到提交阶段。
+# ⚠️ 2026-09-21 起为**空集** —— 微盘分享链接曾被判拒收（2026-09-20 实测 failed_reason
+#   「非法的 'file_id'」），但 2026-09-21 复验：**服务端已直接接受分享链接**，
+#   且以链接本身作为身份（新建条目 source.href.id = 分享链接原文），故不再拒收。
+#   保留常量是为了将来出现真正不被接受的形态时，有统一的落点。
+# 历史与证据见 references/pitfalls.md §2.2 / §2.3（已按 2026-09-21 复验改写）。
+REJECTED_KINDS = set()
 
 # ==========================================================================
 # 冲突处理策略（服务端字段 `conflict_strategy`）
@@ -403,7 +407,7 @@ def load_config(ctx):
 
     if not candidates:
         print("profile 「%s」的 source.candidates 为空：请至少放一条企微候选"
-              "（服务端直接接受的形态：在线文档 URL 或微盘 file_id）。"
+              "（源端链接原文：在线文档 URL 或微盘分享链接，整条粘贴）。"
               % ctx.profile, file=sys.stderr)
         sys.exit(1)
 
@@ -760,8 +764,8 @@ def build_plan(cfg, index, lookup=None):
     铁律 1：脚本绝不改写**待提交**字符串。命中归一索引时**回填既有原始字符串**
     （服务端按字节命中 → 幂等）；未命中则用候选原样字符串提交。
     铁律 2：norm() 只用于这里的判等，绝不回传给服务端。
-    铁律 3：候选必须是服务端直接接受的形态 —— 本函数**不做**任何 ID 换算。
-            REJECTED_KINDS 一律拒收（由调用方打印指引并 exit 1），
+    铁律 3：候选只填**源端链接原文**，本函数**不做**任何 ID 换算，也不改形态。
+            （REJECTED_KINDS 当前为空集；真出现服务端实测拒收的形态时才由调用方打印指引并 exit 1。）
             以免把「本机是否装了某个企微侧工具」变成 skill 的隐式前置条件。
     """
     files, plan = [], []
@@ -982,12 +986,11 @@ def _prepare(ctx, cfg):
     if files is None:
         i, raw, kind, detail = plan
         if kind in REJECTED_KINDS:
-            print("候选 #%d 是微盘分享链接，**本 skill 不做 ID 换算**，已中止"
-                  "（未发出导入请求；此前已为构建去重索引读取过目标目录）：\n  %s\n"
-                  "  · 分享链接形态服务端实测拒收（failed_reason『非法的 'file_id'』），不能原样提交。\n"
-                  "  · 需先把它换成 file_id（`fi…` 长串）再填进 config.json 的候选 —— 这一步在**对话中**\n"
-                  "    由 Agent 引导你取得该文件在企微侧的 file_id，本脚本不代跑、不猜测。\n"
-                  % (i, raw), file=sys.stderr)
+            print("候选 #%d 的 id 形态服务端**实测拒收**（%s）：%s。已中止"
+                  "（未发出导入请求；此前已为构建去重索引读取过目标目录）。\n"
+                  "  · 换一种服务端接受的形态再填：%s\n"
+                  "  · 形态与实测证据见 references/wecom-sources.md。本脚本不代跑换算、不猜测。"
+                  % (i, kind, raw, ID_SHAPE_HINT), file=sys.stderr)
         elif kind is None:
             print("候选 #%d 的 id 形态无法识别：%s。%s" % (i, raw, ID_SHAPE_HINT), file=sys.stderr)
         else:

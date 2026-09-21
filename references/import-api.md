@@ -89,7 +89,7 @@
 | `type` | ✅ | string | 实测**仅支持** `"wecombot"`（传其他值回 `code=50090008 导入类型不支持`）。服务端回写 `source.platform="wecombot"`、`platform_i18n_name={zh_cn:"企业微信",en_us:"WeCom"}` |
 | `parent_entry_id` | ✅ | string | 目标**目录** entry_id（不是 space 的 root）。同样用 `scripts/sync.py resolve` 得到 |
 | `files` | ✅ | array | **非空**：传 `[]` 也报 `value is required` |
-| `files[].id` | ✅ | string | 企微侧标识：在线文档原始 URL / 微盘 `file_id`（**只能是服务端直接接受的形态**；微盘分享链接须先换成 `file_id`，本 skill 不做这一步） |
+| `files[].id` | ✅ | string | 源端标识，**填用户能拿到的链接原文**：在线文档原始 URL（含 `?scode=`）/ 微盘分享链接（含 `?k=`，2026-09-21 复验服务端已接受）；`file_id`（`fi…`）与裸 docid 亦兼容但不推荐 |
 | `files[].include_subpages` | 可选 | bool | `true` = 连子页一起导入（智能文档每个子页落成独立子条目）。缺省取 `source.include_subpages`（默认 `true`） |
 | `dry_run` | 可选 | bool | `true` = 预演不写库（⚠️ **对 `conflict_strategy` 是盲的** —— 见下） |
 | `conflict_strategy` | 可选 | enum | `"skip"` / `"replace"` / `"keep_both"`。**脚本一律显式下发，默认 `skip`** —— 不传时服务端默认行为是破坏性的，见下 |
@@ -269,9 +269,10 @@ code=51 validate proto message: validation error:
 | `…/doc/w3_AE8…`（**剥掉 `?scode=`**） | `add_num` | **不同身份 → 会重复** |
 | `w3_AE8…`（**裸 docid**） | `add_num` | **不同身份 → 会重复** |
 
-微盘同理：**分享链接 `s?k=…` 与 `file_id` 的归一值不相等**（前者 `add_num`、后者 `special`）。
-→ 因此**分享链接必须在提交之前换成 `file_id`**（2026-09-21 起属**对话内动作**，本 skill 不做），
-拿分享链接直接去索引里找是找不到的。详见 `pitfalls.md` §2.2 与 `wecom-sources.md` §2。
+微盘同理：**分享链接 `s?k=…` 与 `file_id` 的归一值不相等**（两者会被判为不同身份）。
+→ 因此**同一份微盘资产只固化一种写法**：2026-09-21 起推荐**分享链接原样提交**（服务端已直接接受，
+见 `pitfalls.md` §2.2）；老配置里的 `file_id` 可继续用，但**不要与链接混用**。
+详见 `pitfalls.md` §2.2 与 `wecom-sources.md` §1.1。
 
 🔴 **结论（不可违反）**：脚本绝不改写待提交的 ID 字符串。正确做法 = **客户端归一「匹配」 + 服务端原样「去重」**：
 命中既有条目时**回填既有的原始字符串**（服务端字节命中 → 幂等），未命中则用候选**原样**提交。

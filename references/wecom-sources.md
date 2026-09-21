@@ -1,6 +1,8 @@
 # 企微侧来源与 ID 取法
 
-> 本文回答两个问题：**`files[].id` 能填什么形态** / **用户给的是微盘分享链接时怎么办**。
+> 本文回答两个问题：**`files[].id` 能填什么形态** / **候选清单托管在企微文档里时怎么抽取**。
+> 🔴 **输入面原则**：候选一律填**用户在企微界面能复制到的那个形态**（链接），**原样粘贴**；
+> 「链接 → 内部 ID」的换算**在 2026-09-21 之后不再有必要**（见 §1.1）。
 > ⚠️ 凡标注「未实测」的形态，是**按同一 provider 的路径规律推断**的，**不要当事实引用**。
 >
 > 🔴 **边界前提（2026-09-21 用户裁决）**：本 skill **只调乐享 MCP，不碰企微侧** ——
@@ -17,9 +19,8 @@
 微盘文件                  →  fi… 长串（file_id）
 ```
 
-微盘**分享链接**（`https://drive.weixin.qq.com/s?k=…`）**服务端不接受**：实测 `create` 原样提交回
-`failed_code: import_failed` / `failed_reason: 非法的 'file_id'`（原文见 §1.2）。
-必须先换成 `file_id` —— **这一步本 skill 不做**，由 Agent 在对话中完成（§2）。
+微盘**分享链接**曾被判「服务端不接受」（2026-09-20 实测 `非法的 'file_id'`），**该结论已过期**：
+2026-09-21 复验，服务端**直接接受分享链接**，并以链接本身作为条目身份。详见 §1.1。
 
 ### 形态全表（脚本 `classify_id()` 的本地白名单与此一致）
 
@@ -29,14 +30,17 @@
 | 企微智能文档 smartpage | 完整 URL | `https://doc.weixin.qq.com/smartpage/a1_AC0…?scode=…` | ✅ ⭐ 推荐 | ✅ **已实测 succeed** |
 | 智能文档子页 | URL + fragment | `https://doc.weixin.qq.com/smartpage/a1_xxx#page=<pageId>` | ✅ | ✅ 身份锚点（`include_subpages` 下每个子页落成独立子条目） |
 | 微盘文件 | `file_id` | `fi…`（`fi` + 长串，实测 109 字符） | ✅ ⭐ **唯一被接受的微盘形态** | ✅ **已实测 succeed** |
-| 微盘文件 | **分享链接** | `https://drive.weixin.qq.com/s?k=<share_key>` | ❌ **不接受**（须先换成 `file_id`） | ❌ 原样提交实测 `import_failed`（§1.2） |
+| 微盘文件 | **分享链接** | `https://drive.weixin.qq.com/s?k=<share_key>` | ✅ ⭐ **推荐** | ✅ **2026-09-21 复验：已接受**（新建条目 `href.id` = 链接原文） |
 | 企微在线表格 sheet | 完整 URL | `https://doc.weixin.qq.com/sheet/e3_…?scode=…`（实测形态） | ⚠️ 未实测 | ⚠️ **未实测**（按同一 provider 路径推断；`e3_` 与 `type=sheet` 的对应已由枚举对照确认） |
 | 企微智能表格 smartsheet | 完整 URL | `https://doc.weixin.qq.com/smartsheet/s3_…?scode=…` | ⚠️ 未实测 | ⚠️ **未实测**（`s3_` 前缀系枚举时**观察到**，但**未做 `create` 提交实测**——「观察到」≠「实测成功」） |
 | 企微在线文档 doc | 裸 docid | `w3_<docid>` | ✅ | ✅ 已实测 succeed |
 
-### 🔴 微盘分享链接：服务端不接受该**形态**，必须**先换成 `file_id`**
+### 🔴 微盘分享链接：**服务端已直接接受**（2026-09-21 结论翻转）
 
-**结论一句话：分享链接不能原样提交。本 skill 不代换 —— 由 Agent 在对话中把它换成 `file_id` 后再写进 config。**
+**结论一句话：候选里原样填分享链接即可，不需要、也不允许换算成 `file_id`。**
+
+实测（2026-09-21，单条候选、`conflict_strategy=skip`）：`succeed 1/1`，目的端新建条目
+`source.href.id = "https://drive.weixin.qq.com/s?k=<share_key>"` —— **身份就是链接原文**。
 
 实测 `create` **原样提交** `https://drive.weixin.qq.com/s?k=<share_key>` 的结果：
 
@@ -46,14 +50,14 @@
 ```
 
 - 该链接经解析能正常返回 `file.id`（见 §2），说明**链接本身有效**，是**服务端侧**不接受这个形态。
-- 需求摘要 §2.2 最初记为「微盘分享链接 ✅ succeed」，**该记载已按本次实测改正**：服务端**只认 `file_id`**，
-  **不存在「两种形态都行」的做法**。
-- **本 skill 的行为（2026-09-21 起）**：候选若是分享链接 → `build_plan()` 经 `REJECTED_KINDS` **直接拒收**，
-  `dry-run` / `create` 打印「本 skill 不做 ID 换算」+ 换法指引，`exit 1`，**不发出导入请求**
-  （此前已为构建去重索引发过 `entry_list_children` 读请求）。
+- **历史（勿再引用）**：2026-09-20 原样提交同一形态曾回 `import_failed / 非法的 'file_id'` ——
+  该结论**仅在当天成立**，2026-09-21 复验已翻转。
+- **本 skill 的行为（2026-09-21 下午起）**：`REJECTED_KINDS` 为**空集** —— 分享链接**不再被拦截**，
+  `build_plan()` 原样提交。历史上「识别到即拒收 + 打印换法指引」的逻辑已随结论翻转删除。
   > 边界理由：不把「本机是否装了某个企微侧工具」变成 skill 的隐式前置条件。
 - ⚠️ **归一后不是同一身份**：`norm()` 保留分享链接的 `s?k=<k>`，而 `file_id` 的归一值是它自己 ——
-  两者**不相等**。所以「拿分享链接去目标目录索引里找」**永远找不到**，转换是**必需的**，且必须在**提交之前**完成。
+  两者**不相等**。所以「拿分享链接去索引里找 `file_id` 条目」永远找不到 —— 这不是要你换算，
+  而是提醒：**同一资产只固化一种写法**，混用会在目的端各建一条。
 - ⚠️ **分寸**：**文档类**才是「混用两种形态即重复」（见下一节）；微盘只固化 `file_id` 一种写法。
 
 ### 🔴 「裸 docid」与「URL」也**不是**同一个身份
@@ -130,16 +134,19 @@
 
 ---
 
-## 2. 把微盘分享链接换成 `file_id`（**Agent 在对话中做，本 skill 不做**）
+## 2. 微盘：直接用分享链接（**不需要**换算成 `file_id`）
 
-本 skill 只接受服务端认的形态。用户手上若只有微盘分享链接，**Agent 在对话中**完成下面这一步，
-拿到 `file.id` 后由 Agent 写进 `config.json` 的 `source.candidates`。
+用户从企微复制到的分享链接，**原样**写进 `config.json` 的 `source.candidates` 即可，一个字符都不改。
+**不要**再做「先查 `file_id`、再写进 config」这一步 —— 那是旧服务端限制下的临时做法，
+现在既没必要，还会因为两种形态互不相等而在目的端造出**重复条目**。
 
-企微侧只读查询通道（本机已安装并授权）—— `disk files get` 就是「分享链接 → file_id」：
+### （排障备用）企微侧只读查询通道
+
+只在**排障或核对元信息**时用（例如「这条链接到底指向哪个文件」），**不是配置前置条件**：
 
 | 用途 | 命令 |
 |---|---|
-| 微盘文件元信息（**分享链接 → file_id**） | `wecom-cli disk files get --json '{"url":"https://drive.weixin.qq.com/s?k=xxx"}'` |
+| 微盘文件元信息（链接 → `file.id` / 文件名 / 大小 / 更新时间） | `wecom-cli disk files get --json '{"url":"https://drive.weixin.qq.com/s?k=xxx"}'` |
 | 微盘最近浏览（用户让你找文件时用） | `wecom-cli disk files list --json '{"limit":100}'` |
 | 微盘搜索 | `wecom-cli disk files search --json '{"keywords":["关键词"],"file_types":[],"limit":100}'` |
 
@@ -174,7 +181,7 @@ $ wecom-cli disk files get --json '{"url":"https://drive.weixin.qq.com/s?k=<shar
 ```bash
 # 1. 先拿到**服务端接受的形态**
 #    · 在线文档 / 智能文档 / 表格 → 用户从企微界面复制完整 URL（含 ?scode=）
-#    · 微盘 → 先按 §2 在对话中换成 file_id（Agent 引导，本 skill 不做）
+#    · 微盘 → 从企微界面复制分享链接（含 ?k=），原样即可
 
 # 2. 由 Agent 写进 config.json 的 source.candidates —— 原样粘贴，别手改
 #    （只有 id 字段必填；key / include_subpages / note 都可省略）
@@ -188,7 +195,7 @@ python3 scripts/sync.py create --profile <name>
 
 **同一资产只固化一种形态并复用它**：
 - **文档类**：带 `?scode=` 的完整 URL / 剥掉 query 的 URL / 裸 docid 三者**互不相等**，混用即重复导入；
-- **微盘**：只用 `file_id` 一种写法（分享链接不被服务端接受，也不参与匹配）。
+- **微盘**：统一用**分享链接**（老配置的 `file_id` 可继续用，但不要与链接混用）。
 
 > ⚠️ 枚举侧的**完整性未验证**（`list` 与 `search` 两条路径视图不同、`list` 不返回 folder），
 > 且枚举能力已不在本 skill 内。详见 `pitfalls.md` §2.4 (c) 与 §2.8。
