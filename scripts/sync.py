@@ -37,11 +37,11 @@ MCP 调用路径（走哪条**由当前可见 tools 决定**，不遵守会让�
     · 另一条路径留作兜底（探测失败 / 服务端反馈与清单不一致时）；两条都被拒才报错。
     --debug 打印的等价 curl 就是最终发出的这一层，可直接复制复现。
 
-候选 id 填什么（**只能填服务端直接接受的形态**）：
-    · 企微在线文档 / 智能文档 / 表格 → **原始链接**：`https://doc.weixin.qq.com/...` 整条粘贴（含 `?scode=`）。
+候选 id 填什么（**就一条规则：填用户能复制的链接原文**）：
+    · 企微在线文档 / 智能文档 / 表格类 / 其他文档类型 → **原始链接**：`https://doc.weixin.qq.com/...`
+      整条粘贴（含 `?scode=`）。**不做类型筛选、不做预处理** —— 哪些能导入由服务端判定。
     · 微盘文件 → **分享链接**：`https://drive.weixin.qq.com/s?k=…` 整条粘贴（含 `?k=`）。
-      2026-09-21 复验：服务端**直接接受**该形态并以链接本身作为身份，**无需**也不应换成 `file_id`。
-    · 裸 docid / 裸 file_id 也能识别，但**不推荐**：正常用户从企微界面拿不到
+    · 老配置里的裸 docid / 裸 file_id 也能识别并照原样提交，但**不推荐**：正常用户从企微界面拿不到
       （且与链接形态互不相等，混用会在目的端产生重复条目）。
     · **链接 ↔ ID 的任何互转、剥离 query 参数，都是多余动作**，一律不做。
 
@@ -56,11 +56,14 @@ MCP 调用路径（走哪条**由当前可见 tools 决定**，不遵守会让�
        含 7 条与本批无关的，裁成本次提交的 3 条）→ 脚本**绝不省略**这个字段。详见 references/pitfalls.md §2.9。
 
 退出码：0 成功（含「已有进行中任务 → 静默退出」，供定时任务复用）；
-        1 运行期失败（鉴权失效 / 任务 failed / ID 形态非法 / 凭证缺失 / 目录扫描失败 /
-                     网络异常 / 轮询超时 / 候选为服务端拒收形态）；
+        1 运行期失败（鉴权失效 / 任务 failed（**含接口判「非法的 'file_id'」等形态问题**）/
+                     凭证缺失 / 目录扫描失败 / 网络异常 / 轮询超时）；
         2 用法错误（未知命令、缺参数）。
 
-🔴 三条不变式（改代码前务必先读 references/pitfalls.md）：
+🔴 四条不变式（改代码前务必先读 references/pitfalls.md）：
+   0. **脚本不做任何判断逻辑** —— 不预判候选能不能导入、不按类型拦截、不因「形态不认识」而中止。
+      候选**原样提交**，服务端怎么判就怎么回传；接口的**原始信息与错误**交回给 Agent 组织话术。
+      ⚠️ 严禁把「某类型不可导入 / 已实测 / 未实测」这类**我们的推断**写回代码（历史教训见 pitfalls.md §2.4）。
    1. 脚本绝不改写**待提交**的 ID 字符串（剥 query、URL↔裸 id 互转 → 制造重复条目）。
       候选一律**原样提交**（命中归一索引时回填既有原串，仍不改一个字符）。
    2. norm() 仅供客户端匹配判等，绝不回传给服务端。
@@ -293,49 +296,44 @@ def norm(raw):
 # ID 形态本地校验（classify_id 为纯本地函数，只做正则匹配，不发起网络请求）
 # ==========================================================================
 
-# (kind, 正则, 人话标签, 是否已实测)
+# 形态识别表 —— **只用于在报告里给人看的标签，不参与「能不能提交」的判断**。
+# 🔴 设计原则（2026-09-21 用户裁决）：本 skill **不做任何判断逻辑** ——
+#   · 候选能不能导入、服务端收不收，**一律由服务端判定**；脚本只负责**原样提交**；
+#   · 脚本输出的是**接口原样返回的信息与错误**（计数 / entries / failed_items / task_id …），
+#     由 Agent 负责组织成给用户的话术；
+#   · 因此这里**没有**「已实测 / 未实测 / 不可导入 / 拒收」这类结论，也**不得**再把
+#     任何「类型支持性」的判断加回来；识别不出形态也**照原样提交**，不阻断、不预判。
 _ID_RULES = [
     ("wecom_doc_url", re.compile(r"^https?://doc\.weixin\.qq\.com/doc/[A-Za-z0-9_\-]+", re.I),
-     "企微在线文档 URL（/doc/）", True),
+     "企微在线文档 URL（/doc/）"),
     ("wecom_smartpage_url", re.compile(r"^https?://doc\.weixin\.qq\.com/smartpage/[A-Za-z0-9_\-]+", re.I),
-     "企微智能文档 URL（/smartpage/）", True),
+     "企微智能文档 URL（/smartpage/）"),
     ("wecom_sheet_url", re.compile(r"^https?://doc\.weixin\.qq\.com/sheet/[A-Za-z0-9_\-]+", re.I),
-     "企微在线表格 URL（/sheet/）", False),
+     "企微在线表格 URL（/sheet/）"),
     ("wecom_smartsheet_url", re.compile(r"^https?://doc\.weixin\.qq\.com/smartsheet/[A-Za-z0-9_\-]+", re.I),
-     "企微智能表格 URL（/smartsheet/）", False),
+     "企微智能表格 URL（/smartsheet/）"),
     ("wecom_disk_share_url", re.compile(r"^https?://drive\.weixin\.qq\.com/s\?[^\s]*\bk=[A-Za-z0-9_\-]+", re.I),
-     "微盘分享链接（drive.weixin.qq.com/s?k=）", True),
+     "微盘分享链接（drive.weixin.qq.com/s?k=）"),
     ("wecom_disk_file_id", re.compile(r"^fi[A-Za-z0-9_\-]{20,}$"),
-     "微盘 file_id（fi… 长串）", True),
-    # 裸 docid：需求摘要点名的是 w3_ / a1_ / b1_（已实测）。
-    ("wecom_bare_id", re.compile(r"^(?:w3_|a1_|b1_)[A-Za-z0-9_\-]+$"),
-     "裸 docid（w3_ / a1_ / b1_）", True),
-    # 实跑 disk files list 发现 docid 字段远不止 w3_/a1_/b1_：还出现 e3_（sheet）、s3_（smartsheet）、
-    # d3_（pdf）、p3_（slide）、f4_（flowchart）。（早前另记有 c2_ / m4_，2026-09-21 复核时未复现。）
-    # 无法识别这些前缀会让用户合法粘贴的裸 docid 被本地误判为「形态非法」，所以放行；
-    # 但**没有实测**过它们能否被导入，故标 False（脚本会打印「按同一 provider 路径推断，未实测」）。
-    ("wecom_bare_id_other", re.compile(r"^[a-z][0-9]_[A-Za-z0-9_\-]{6,}$"),
-     "裸 docid（w3_/a1_/b1_ 之外的前缀：e3_ / s3_ / d3_ 等）", False),
+     "微盘 file_id（fi… 长串）"),
+    # 裸 docid：只做「像不像 docid」的模式识别 —— 不判断它对应哪种文档类型，也不判断能不能导入。
+    ("wecom_bare_id", re.compile(r"^[a-z][0-9]_[A-Za-z0-9_\-]+$"),
+     "裸 docid"),
 ]
 
 ID_SHAPE_HINT = (
-    "推荐填源端链接原文，且**原样粘贴**：企微在线文档 / 智能文档 / 表格 URL"
-    "（`https://doc.weixin.qq.com/...` 整条，含 ?scode=）、微盘分享链接"
-    "（`https://drive.weixin.qq.com/s?k=…` 整条，含 ?k=）。"
-    "微盘 file_id（fi… 长串）与裸 docid（w3_ / a1_ 等）也接受，但正常用户从企微界面拿不到，不推荐；"
-    "**链接 ↔ ID 的互转、剥离 ?scode=/?k= 都会让服务端判成另一个身份**，故一律不做"
+    "候选请填**源端链接原文**并**原样粘贴**"
+    "（`https://doc.weixin.qq.com/...` 含 ?scode=、`https://drive.weixin.qq.com/s?k=…` 含 ?k=）。"
+    "**链接 ↔ ID 的互转、剥离 query 参数都会被服务端判成另一个身份**（→ 目的端重复条目），一律不做；"
+    "**形态能不能用由服务端判定** —— 脚本不预判、不拦截，原样提交并把接口回包如实返回"
 )
 
-# 按同一 provider 路径推断、但本次未实测的形态 —— 必须显式提示，不能把推断当事实
-UNVERIFIED_KINDS = {"wecom_sheet_url", "wecom_smartsheet_url", "wecom_bare_id_other"}
-
-# 服务端**实测拒收**的形态：识别出来只为给一条明确指引，绝不放行到提交阶段。
-# ⚠️ 2026-09-21 起为**空集** —— 微盘分享链接曾被判拒收（2026-09-20 实测 failed_reason
-#   「非法的 'file_id'」），但 2026-09-21 复验：**服务端已直接接受分享链接**，
-#   且以链接本身作为身份（新建条目 source.href.id = 分享链接原文），故不再拒收。
-#   保留常量是为了将来出现真正不被接受的形态时，有统一的落点。
-# 历史与证据见 references/pitfalls.md §2.2 / §2.3（已按 2026-09-21 复验改写）。
-REJECTED_KINDS = set()
+# ⚠️ 这里**不再有**「已实测可用 / 未实测 / 不可导入 / 拒收」之类的形态分档集合。
+#    历史（2026-09-21 前）：曾有 REJECTED_KINDS（拦下、exit 1）、UNVERIFIED_KINDS（打印「未实测」）、
+#    NO_CONTENT_API_KINDS（判定「该类型不可导入」）—— **三者均已按用户裁决删除**。
+#    理由：这些是**我们的推断**，不是接口事实；写进代码就变成对服务端的预判，
+#    既会误导用户，也会让「接口报什么就回传什么」失真。
+#    现在只做一件事：**原样提交，把接口回包与错误原样交回给 Agent**。
 
 # ==========================================================================
 # 冲突处理策略（服务端字段 `conflict_strategy`）
@@ -359,14 +357,18 @@ DEFAULT_CONFLICT_STRATEGY = "skip"
 
 
 def classify_id(raw):
-    """返回 (kind, label, tested)；无法识别返回 (None, None, None)。"""
+    """返回 (kind, label)——**仅用于报告里给人读的形态标签**，不参与提交与否的判断。
+
+    识别不出返回 (None, None)，调用方**照原样提交**（不阻断、不预判、不换算）。
+    绝不在此处判断「服务端收不收 / 能不能导入」—— 那是接口的事。
+    """
     s = (raw or "").strip()
     if not s:
-        return None, None, None
-    for kind, rx, label, tested in _ID_RULES:
+        return None, None
+    for kind, rx, label in _ID_RULES:
         if rx.match(s):
-            return kind, label, tested
-    return None, None, None
+            return kind, label
+    return None, None
 
 
 # ==========================================================================
@@ -406,9 +408,8 @@ def load_config(ctx):
         sys.exit(1)
 
     if not candidates:
-        print("profile 「%s」的 source.candidates 为空：请至少放一条企微候选"
-              "（源端链接原文：在线文档 URL 或微盘分享链接，整条粘贴）。"
-              % ctx.profile, file=sys.stderr)
+        print("profile 「%s」的 source.candidates 为空：至少放一条候选。%s"
+              % (ctx.profile, ID_SHAPE_HINT), file=sys.stderr)
         sys.exit(1)
 
     for i, c in enumerate(candidates, 1):
@@ -759,25 +760,18 @@ def build_plan(cfg, index, lookup=None):
     目端既有条目的 `{entry_id, name, target_type}` 挂到 `plan[i]["dst"]`，
     供 `render_report` 打出「文档名 + 目端链接」。不传则 `dst=None`（输出不受影响）。
 
-    失败时返回 (None, (序号, 原始输入, kind, 细节))，由调用方打印错误并 exit 1。
-
     铁律 1：脚本绝不改写**待提交**字符串。命中归一索引时**回填既有原始字符串**
     （服务端按字节命中 → 幂等）；未命中则用候选原样字符串提交。
     铁律 2：norm() 只用于这里的判等，绝不回传给服务端。
-    铁律 3：候选只填**源端链接原文**，本函数**不做**任何 ID 换算，也不改形态。
-            （REJECTED_KINDS 当前为空集；真出现服务端实测拒收的形态时才由调用方打印指引并 exit 1。）
-            以免把「本机是否装了某个企微侧工具」变成 skill 的隐式前置条件。
+    铁律 3：**本函数不做任何「能不能导入」的判断** —— 候选只填源端链接原文，
+            不做 ID 换算、不改形态、不按类型拦截，也**不再**因「识别不出形态」而中止：
+            一律原样提交，由服务端判定，接口回包原样交回给 Agent。
     """
     files, plan = [], []
     for i, c in enumerate(cfg["candidates"], 1):
         c = c or {}
         submit_raw = str(c.get("key") or c.get("id") or "")
-        kind, label, tested = classify_id(submit_raw)
-        if kind is None:
-            return None, (i, submit_raw, None, "")
-
-        if kind in REJECTED_KINDS:
-            return None, (i, submit_raw, kind, "")
+        kind, label = classify_id(submit_raw)
 
         k = norm(submit_raw)
         if k in index:
@@ -786,7 +780,7 @@ def build_plan(cfg, index, lookup=None):
             submit, result = submit_raw, "NEW→原样提交"
         plan.append({
             "i": i, "result": result, "submit": submit,
-            "kind": kind, "label": label, "tested": tested,
+            "kind": kind, "label": label,
             "note": str(c.get("note") or ""),
             "dst": (lookup or {}).get(k),
         })
@@ -803,8 +797,8 @@ def render_plan(plan):
     for p in plan:
         print("    #%d %-18s submit=%s" % (p["i"], p["result"], p["submit"]))
         tips = []
-        if not p["tested"]:
-            tips.append("形态 %s：按同一 provider 路径推断，未实测" % p["label"])
+        if p["label"]:
+            tips.append("形态 %s" % p["label"])
         if p["note"]:
             tips.append(p["note"])
         if tips:
@@ -983,21 +977,6 @@ def _prepare(ctx, cfg):
     index = build_norm_index(existing)
     lookup = build_entry_lookup(existing)
     files, plan = build_plan(cfg, index, lookup)
-    if files is None:
-        i, raw, kind, detail = plan
-        if kind in REJECTED_KINDS:
-            print("候选 #%d 的 id 形态服务端**实测拒收**（%s）：%s。已中止"
-                  "（未发出导入请求；此前已为构建去重索引读取过目标目录）。\n"
-                  "  · 换一种服务端接受的形态再填：%s\n"
-                  "  · 形态与实测证据见 references/wecom-sources.md。本脚本不代跑换算、不猜测。"
-                  % (i, kind, raw, ID_SHAPE_HINT), file=sys.stderr)
-        elif kind is None:
-            print("候选 #%d 的 id 形态无法识别：%s。%s" % (i, raw, ID_SHAPE_HINT), file=sys.stderr)
-        else:
-            print("候选 #%d 的 id 形态不可提交（%s）：%s。%s%s"
-                  % (i, kind, raw, ID_SHAPE_HINT,
-                     ("\n  " + detail) if detail else ""), file=sys.stderr)
-        return None, None, 1
     return files, plan, 0
 
 
