@@ -77,7 +77,7 @@
 | 分享链接（`s?k=…`）**原样**提交 | ❌ **任务 failed（`import_failed` / 非法的 'file_id'）** |
 | 分享链接**换成** `file_id` 后提交 | ✅ 与直接填 `file_id` 等价（同一身份） |
 
-**实测案例**：候选 `https://drive.weixin.qq.com/s?k=AJEAIQdfAAo074xVtA` 与目标目录既有条目
+**实测案例**：候选 `https://drive.weixin.qq.com/s?k=<share_key>` 与目标目录既有条目
 `<entry_id_A>`（`source.href.id = fi…`，109 字符）
 是**同一份 mp3**。分享链接**原样**提交 → 服务端判 `import_failed / 非法的 'file_id'`（见 §2.3）。
 
@@ -401,8 +401,8 @@ WARN: 目标目录存在 2 条同源条目（entry_id: <entry_id_B> (created_at=
   既有扫描   : entry_list_children → 10 条
 WARN: 目标目录存在 2 条同源条目（entry_id: <entry_id_B> (created_at=1789446554), <entry_id_C> (created_at=1789901234)），归一索引取最早一条 <entry_id_B>
   候选提交保真清单（实际提交字符串 · 匹配结果）:
-    #1 MATCHED→复用既有       submit=https://doc.weixin.qq.com/doc/w3_AE8…?scode=AJEAIQdfAAo00czfdg
-    #2 MATCHED→复用既有       submit=https://doc.weixin.qq.com/smartpage/a1_AC0…?scode=AJEAIQdfAAoPizsdSqAC0AR3j-AG8
+    #1 MATCHED→复用既有       submit=https://doc.weixin.qq.com/doc/w3_AE8…?scode=<scode>
+    #2 MATCHED→复用既有       submit=https://doc.weixin.qq.com/smartpage/a1_AC0…?scode=<scode>
     #3 MATCHED→复用既有       submit=fi…
         └ <候选 note，填了才打>
   将新增 : 0 条（add_num）   已存在 : 3 条（special_num）

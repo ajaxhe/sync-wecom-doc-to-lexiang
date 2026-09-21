@@ -29,20 +29,20 @@
 | 企微智能文档 smartpage | 完整 URL | `https://doc.weixin.qq.com/smartpage/a1_AC0…?scode=…` | ✅ ⭐ 推荐 | ✅ **已实测 succeed** |
 | 智能文档子页 | URL + fragment | `https://doc.weixin.qq.com/smartpage/a1_xxx#page=<pageId>` | ✅ | ✅ 身份锚点（`include_subpages` 下每个子页落成独立子条目） |
 | 微盘文件 | `file_id` | `fi…`（`fi` + 长串，实测 109 字符） | ✅ ⭐ **唯一被接受的微盘形态** | ✅ **已实测 succeed** |
-| 微盘文件 | **分享链接** | `https://drive.weixin.qq.com/s?k=AJEAIQdfAAo074xVtA` | ❌ **不接受**（须先换成 `file_id`） | ❌ 原样提交实测 `import_failed`（§1.2） |
+| 微盘文件 | **分享链接** | `https://drive.weixin.qq.com/s?k=<share_key>` | ❌ **不接受**（须先换成 `file_id`） | ❌ 原样提交实测 `import_failed`（§1.2） |
 | 企微在线表格 sheet | 完整 URL | `https://doc.weixin.qq.com/sheet/<id>` | ⚠️ 未实测 | ⚠️ **未实测**（按同一 provider 路径推断） |
 | 企微智能表格 smartsheet | 完整 URL | `https://doc.weixin.qq.com/smartsheet/s3_ABoA…?scode=…` | ⚠️ 未实测 | ⚠️ **未实测**（`s3_` 前缀系枚举时**观察到**，但**未做 `create` 提交实测**——「观察到」≠「实测成功」） |
-| 企微在线文档 doc | 裸 docid | `w3_AE8AeAYWAEECN60aU9VvvTzOAfSrZ` | ✅ | ✅ 已实测 succeed |
+| 企微在线文档 doc | 裸 docid | `w3_<docid>` | ✅ | ✅ 已实测 succeed |
 
 ### 🔴 微盘分享链接：服务端不接受该**形态**，必须**先换成 `file_id`**
 
 **结论一句话：分享链接不能原样提交。本 skill 不代换 —— 由 Agent 在对话中把它换成 `file_id` 后再写进 config。**
 
-实测 `create` **原样提交** `https://drive.weixin.qq.com/s?k=AJEAIQdfAAo074xVtA` 的结果：
+实测 `create` **原样提交** `https://drive.weixin.qq.com/s?k=<share_key>` 的结果：
 
 ```json
 { "failed_code": "import_failed",
-  "failed_reason": "非法的 'file_id', 请重新检查'file_id'的值是否正确: https://drive.weixin.qq.com/s?k=AJEAIQdfAAo074xVtA" }
+  "failed_reason": "非法的 'file_id', 请重新检查'file_id'的值是否正确: https://drive.weixin.qq.com/s?k=<share_key>" }
 ```
 
 - 该链接经解析能正常返回 `file.id`（见 §2），说明**链接本身有效**，是**服务端侧**不接受这个形态。
@@ -131,7 +131,7 @@
 `disk files get` 返回的 `file.id` **就是 `files[].id` 要的值**。实测：
 
 ```bash
-$ wecom-cli disk files get --json '{"url":"https://drive.weixin.qq.com/s?k=AJEAIQdfAAo074xVtA"}'
+$ wecom-cli disk files get --json '{"url":"https://drive.weixin.qq.com/s?k=<share_key>"}'
 { "file": { "id": "fi…",
             "file_name": "标准录音 1.mp3", "type": "file", "file_size": 443767,
             "create_time": "2026-08-28 15:26:11", "update_time": "2026-08-28 15:26:11",

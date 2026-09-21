@@ -161,11 +161,11 @@ code=51 validate proto message: validation error:
   "current_num": 3,
   "err_message": "导入失败，请查看失败文档",
   "failed_items": [
-    { "id": "https://drive.weixin.qq.com/s?k=AJEAIQdfAAo074xVtA",
-      "name": "https://drive.weixin.qq.com/s?k=AJEAIQdfAAo074xVtA",
+    { "id": "https://drive.weixin.qq.com/s?k=<share_key>",
+      "name": "https://drive.weixin.qq.com/s?k=<share_key>",
       "display_icon": "page",
       "failed_code": "import_failed",
-      "failed_reason": "非法的 'file_id', 请重新检查'file_id'的值是否正确: https://drive.weixin.qq.com/s?k=AJEAIQdfAAo074xVtA (callid: …)" }
+      "failed_reason": "非法的 'file_id', 请重新检查'file_id'的值是否正确: https://drive.weixin.qq.com/s?k=<share_key> (callid: …)" }
   ]
 }}
 ```
@@ -231,7 +231,7 @@ code=51 validate proto message: validation error:
 
 | 提交的 `files[].id` | 服务端判定 | 含义 |
 |---|---|---|
-| `…/doc/w3_AE8…?scode=AJEAIQdfAAo00czfdg`（与既有条目**逐字相同**） | `special_num` | 同一身份 → 去重 ✅ |
+| `…/doc/w3_AE8…?scode=<scode>`（与既有条目**逐字相同**） | `special_num` | 同一身份 → 去重 ✅ |
 | `…/doc/w3_AE8…`（**剥掉 `?scode=`**） | `add_num` | **不同身份 → 会重复** |
 | `w3_AE8…`（**裸 docid**） | `add_num` | **不同身份 → 会重复** |
 
@@ -288,7 +288,7 @@ create → code:0 + task_id        （只证明任务已创建，不代表参数
 
 ```json
 { "code": 0, "data": { "entries": [ … ],
-                       "next_page_token": "WzQ1MDM2MTAzNjQ3ODg3MzUsMTI2NjA2N10",
+                       "next_page_token": "<next_page_token>",
                        "prev_page_token": "…" } }
 ```
 
