@@ -306,11 +306,12 @@ _ID_RULES = [
     # 裸 docid：需求摘要点名的是 w3_ / a1_ / b1_（已实测）。
     ("wecom_bare_id", re.compile(r"^(?:w3_|a1_|b1_)[A-Za-z0-9_\-]+$"),
      "裸 docid（w3_ / a1_ / b1_）", True),
-    # 实跑 disk files list 发现 docid 字段远不止 w3_/a1_/b1_：还出现 c2_（收集表）、d3_、e3_、f4_、m4_、p3_、s3_。
+    # 实跑 disk files list 发现 docid 字段远不止 w3_/a1_/b1_：还出现 e3_（sheet）、s3_（smartsheet）、
+    # d3_（pdf）、p3_（slide）、f4_（flowchart）。（早前另记有 c2_ / m4_，2026-09-21 复核时未复现。）
     # 无法识别这些前缀会让用户合法粘贴的裸 docid 被本地误判为「形态非法」，所以放行；
     # 但**没有实测**过它们能否被导入，故标 False（脚本会打印「按同一 provider 路径推断，未实测」）。
     ("wecom_bare_id_other", re.compile(r"^[a-z][0-9]_[A-Za-z0-9_\-]{6,}$"),
-     "裸 docid（w3_/a1_/b1_ 之外的前缀：c2_ / d3_ / s3_ 等）", False),
+     "裸 docid（w3_/a1_/b1_ 之外的前缀：e3_ / s3_ / d3_ 等）", False),
 ]
 
 ID_SHAPE_HINT = (

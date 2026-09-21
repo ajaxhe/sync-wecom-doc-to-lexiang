@@ -137,8 +137,11 @@
 
 - `/sheet/` 与 `/smartsheet/` 的 URL 形态**按同一 provider 路径推断放行**（脚本打印
   「按同一 provider 路径推断，未实测」），但**未实测过**。
-- 裸 docid 的前缀，需求摘要点名的是 `w3_` / `a1_` / `b1_`；实跑发现还有 `c2_` `d3_` `e3_` `f4_` `m4_` `p3_` `s3_`。
+- 裸 docid 的前缀，需求摘要点名的是 `w3_` / `a1_` / `b1_`；实跑发现还有 `e3_` `s3_` `d3_` `p3_` `f4_`（早前另记有 `m4_` `c2_`，**本轮未复现**）。
   脚本对这些**放行但不认作已验证**（同样打印未实测提示）—— 放行的目的是别把用户合法粘贴的 docid 误判成「形态非法」。
+- ⚠️ **2026-09-21 复核修正**：前缀与类型的对应关系早前记错过 —— `s3_` 是 **smartsheet**（不是 sheet）、
+  `e3_` 才是 **sheet**、`d3_` 是 **pdf**（不是「表格类」）。对照依据：把枚举项的 `docid` 前缀与 `type` 字段逐条对照。
+  完整对照表见 `wecom-sources.md` §「`docid` 的前缀远不止 `w3_` / `a1_` / `b1_`」。
 
 **不要把推断写成事实。** 若要转正，需补一次真实 `create` 验证。
 
@@ -146,13 +149,13 @@
 
 | 待验证形态 | 现状 | 转正需要什么 |
 |---|---|---|
-| （a）`/sheet/` URL、`/smartsheet/` URL、`w3_`/`a1_`/`b1_` 之外的裸 docid 前缀（`c2_` `d3_` `e3_` `f4_` `m4_` `p3_` `s3_`） | 本地**放行**、`render_plan()` 打印「按同一 provider 路径推断，未实测」 | **一个真实的 sheet / smartsheet 链接 + 一次真实 `create`**。注意代价：会往目标目录写入条目，且**这批测试链接里没有 sheet/smartsheet 资产**，需先拿到测试对象；写入需 owner 同意 |
+| （a）`/sheet/` URL、`/smartsheet/` URL、`w3_`/`a1_`/`b1_` 之外的裸 docid 前缀（`e3_` `s3_` `d3_` `p3_` `f4_`；`m4_`/`c2_` 本轮未复现） | 本地**放行**、`render_plan()` 打印「按同一 provider 路径推断，未实测」 | **一个真实的 sheet / smartsheet 链接 + 一次真实 `create`**。注意代价：会往目标目录写入条目，写入需 owner 同意。✅ **测试对象已就绪（2026-09-21）**：已由 Agent 在对话中经企微侧枚举产出覆盖各形态的测试候选清单（doc / smartpage / **sheet `e3_`** / **smartsheet `s3_`** / 微盘 `file_id`），不必再等「拿到测试对象」 |
 | （b）**不在提交白名单**的 5 类 `doc_url` 前缀（`/forms/` `/flowchart/` `/mind/` `/pdf/` `/slide/`） | 枚举侧**跳过并计数**（比照 `folder`），不产出候选、不可提交 → **覆盖缺口（`list` 路径）：94 条枚举 → 84 条可提交，10 条挂账**（实测：`/forms/`×5 `/flowchart/`×2 `/mind/`×1 `/pdf/`×1 `/slide/`×1）。📦 枚举能力已于 2026-09-21 移出本 skill | 补 `classify_id()` 白名单 + 一次真实 `create` 实测（写入需 owner 同意） |
 | （c）枚举返回的 `type=folder` 节点（`list` 路径**不返回** folder；`search` 返回，实测 `search 产品 limit=100` 有 29 个） | 枚举侧跳过并计数（`type=folder`）。**两条枚举路径覆盖面是否相同 —— 未验证**：`search` 是否覆盖到 `list` 漏掉的内容、folder 内是否含可导入文档、其叶子是否会在结果中单独出现，**均未验证** | 取同一空间分别跑 `list` 与 `search` 两条路径并比对全集（含 folder 下钻），确认无遗漏、或明确写下遗漏边界 |
 
 > **各处标注须措辞一致**（改一处必须同步其余各处）。当前实际文案：
 > ① `scripts/sync.py` `_ID_RULES` 表的 label 列 →「企微在线表格 URL（/sheet/）」「企微智能表格 URL（/smartsheet/）」
-> 「裸 docid（w3_/a1_/b1_ 之外的前缀：c2_ / d3_ / s3_ 等）」，且 `tested=False`；上方 `UNVERIFIED_KINDS = {"wecom_sheet_url","wecom_smartsheet_url","wecom_bare_id_other"}` 带注释说明「必须显式提示，不能把推断当事实」。
+> 「裸 docid（w3_/a1_/b1_ 之外的前缀：e3_ / s3_ / d3_ 等）」，且 `tested=False`；上方 `UNVERIFIED_KINDS = {"wecom_sheet_url","wecom_smartsheet_url","wecom_bare_id_other"}` 带注释说明「必须显式提示，不能把推断当事实」。
 > ② `wecom-sources.md` §1 形态表 →「⚠️ **未实测**（按同一 provider 路径推断）」。
 > ③ `scripts/sync.py` `render_plan()` 打印给用户 →「形态 `<label>`：按同一 provider 路径推断，未实测」（`label` 取自 `build_plan()` 放进 plan 的人话标签，非 `kind` 机器键）。
 > ④ （**已移除**）`_collect_from_items()` 曾在枚举产出候选时追加同样的未实测提示 —— 该函数随 `collect` 子命令于 2026-09-21 移除。
