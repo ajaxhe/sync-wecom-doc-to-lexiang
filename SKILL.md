@@ -44,11 +44,13 @@ Agent 侧**只做三件事**：① **引导配置**（帮用户把 `config.json`
    实测（2026-09-20）：**不传该字段时，一次 `create` 把目标目录原有 10 条条目（含 7 条与本批候选无关的）裁成本次提交的 3 条**。
    另：**`dry-run` 对该策略是盲的**（不传 / replace / skip / keep_both 四路 `dry_run_stats` 实测完全一致），
    所以「dry-run 报零新增」**不能**当成「真跑不会动目的端」的依据。`replace` 会改动/删除目的端既有条目 → **只能在专用导入目录使用**。
-8. 🔴 **业务工具走哪条路径由「当前可见 tools」决定，不要写死、也不要凭报错猜**
-   （官方规则：可见清单按 company / feature_flag / allowlist 过滤 —— 在清单里就直接调，
-   不在而 `call_tool` 在就必须经它包装）。`scripts/sync.py` 已按官方规则**先查可见 tools 再选路径**，
-   并保留另一条路径兜底 —— **不要绕过脚本直连 MCP**。
-   见到 `tool is not allowed: <工具名>`：**既不是凭证过期、也不是配置错**，而是该 token 的可见清单里没有这个工具。
+8. 🔴 **业务工具走哪条路径由「当前可见 tools」决定 —— 每次先探 `tools/list`，不要写死**
+   （服务端按 company / feature_flag / allowlist 过滤下发，**后台开关也会改可见集**：2026-09-21 乐享曾用参数
+   把大部分工具从 `tools/list` 默认隐藏、agent 看不到就调不到，当日下午已放回）。
+   可见 → 直调；不可见但 `call_tool` 在 → 必须经它包装。`scripts/sync.py` 已按此**先探再选**并留另一条兜底 ——
+   **不要绕过脚本直连 MCP，也不要把某一次的实测状态写死进代码**。
+   见到 `tool is not allowed: <工具名>` = 服务端本次没下发它，**既不是凭证过期、也不是配置错**
+   （判据与实测记录见 `references/import-api.md`）。
 
 ### 可直接复制的命令块
 
@@ -265,7 +267,7 @@ profiles/
 | `create` 跑完**没有** `服务端统计` 一行 | 正常 —— `dry_run_stats` **仅 `dry_run=true` 时才有**（见 `references/import-api.md`），真跑任务不回该字段。定时任务报告里这一项应写「未回传 / 按规则等价 0」，或改用客户端 `候选提交保真清单` 的 `MATCHED→复用既有 / NEW→原样提交` 计数（二者口径不同，别混着说） |
 | 鉴权失败 / 401 | 先按 token 处理：`auth.mcp_token` 无效或过期，从 `https://lexiangla.com/ai/claw` 重新获取。**换 token 后仍失败** → 是乐享侧「授权配置」未完成或已过期，把授权文档给用户（见「配置引导」前置节） |
 | 导入任务 `failed`，原因指向**授权**（未完成 / 已过期） | **不要改 config、不要换 token、不要改候选** —— 这是乐享侧的授权问题，不是本 skill 的参数问题。把授权文档给用户，由其在乐享页面完成授权后重跑 |
-| 报 `tool is not allowed: xxx` | **不要改 config、不要换 token** —— 该报错只说明这个工具不在**当前可见 tools** 里（allowlist 过滤），脚本会自动改走 `call_tool` 包装。判凭证是否有效只需直调一次 `whoami`（成功即有效） |
+| 报 `tool is not allowed: xxx` | **不要改 config、不要换 token、也不要改脚本里的路径** —— 只说明服务端本次下发（`tools/list`）里没有它（后台开关 / allowlist 都会导致），脚本会自动改走 `call_tool` 包装。判凭证是否有效只需直调一次 `whoami`（成功即有效）。想让直调恢复是要**乐享侧放回 + 客户端重启**，本地别绕 |
 | 目录扫描失败 | 脚本**主动中止**、不提交任何任务 —— 这是有意的：跳过匹配强行提交会制造重复 |
 | 候选 ID 形态报错 | 见 `references/wecom-sources.md` 的形态表。**推荐填服务端接受的形态**（在线文档 / 智能文档 / 表格完整 URL、微盘 `file_id`）；`sheet`/`smartsheet` 及 `w3_`/`a1_`/`b1_` 之外的裸 docid 前缀属「按路径推断、未实测」 |
 

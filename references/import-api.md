@@ -15,7 +15,7 @@
 | 获取 token | `https://lexiangla.com/ai/claw` |
 | 🔑 授权配置（前置） | **导入的前置条件**：该乐享企业须在乐享页面完成「授权配置」。**未完成或已过期时，鉴权可能正常、但导入任务失败** —— 按官方文档操作：<https://lexiangla.com/pages/d4a717fbf4604efea4bd286fdcdac31a?company_from=906ba45e6f9a11f089c57a2a2b4bccb6>（本 skill 不做授权、不代查状态、不复述文档内容） |
 
-### 🔴 调用路径：**先看当前可见 tools 再选路径**（不是平台固定行为，别写死）
+### 🔴 调用路径：**先看当前可见 tools 再选路径**（服务端可下发开关，别写死）
 
 官方说明（MCP resource `lexiang://docs/instructions/v1`「工具调用方式」一节）原文规则：
 
@@ -26,21 +26,31 @@
 >   （`tool_name` = 目标工具名，`arguments` = 目标工具的逻辑参数）。
 > 例如调用 `entry_list_children` 时，**不要直接调用该工具**；应调用 `call_tool`。
 
-**所以「能不能直调」取决于你的 token 上下文 —— 不同账号 / 环境可能不同**，不能猜、也不能写死一条路径。
+**结论：这是「条件规则」，且可见集是服务端可调的状态 —— 不能猜、更不能写死一条路径。**
 
-实测（2026-09-21，个人 token 环境，**同一 token、同一秒内**做对照）：
+#### 2026-09-21「直调突然不可用」的完整结论
+
+- **现象**：上午所有联网命令 `exit 1`；直调业务工具回纯文本 `tool is not allowed: <工具名>`，
+  而同一 token、同一秒内直调 `whoami` 正常、经 `call_tool` 包装也正常。
+- **真实原因（乐享侧 2026-09-21 13:19 确认）**：后台**加了个参数，让 MCP tool 列表默认隐藏掉大部分工具**，
+  agent 看不到就调不到；**当日下午已放回**，客户端**重启**后生效。
+  → 既不是凭证问题，也不是「平台禁止直调」。
+- **⚠️ 本机实测（同日下午 14:32，个人 token 直连 HTTP 链路）**：`tools/list` **仍只回 7 个元工具**，
+  `dry-run` 全程走 `call_tool` 包装并 `exit 0`。同期 `list_tool_categories` **能看到全部业务工具目录**
+  （`knowledge.entry` 13 个 / `knowledge.block` 21 个 …）。
+  → **「目录里可发现」≠「`tools/list` 里可见」**：前者是注册表，后者是本次下发的可见集；
+  **服务端开关状态与本地客户端会话可能不同步**（要放回 + 重启才刷新）。
+
+#### 对照实测（2026-09-21，同一 token、同一秒内）
 
 | 调用方式 | `whoami`（元工具） | `entry_list_children` / `import_*`（业务工具） |
 |---|---|---|
 | **直调** `{"name":"<工具>","arguments":{…}}` | ✅ 正常（`code:0`） | ❌ 纯文本 `tool is not allowed: <工具名>` |
 | **包装** `{"name":"call_tool","arguments":{"tool_name":"<工具>","arguments":{…}}}` | ✅ 正常 | ✅ 正常 |
 
-→ 该账号当前 `tools/list` 只有 **7 个元工具**（`whoami` / `call_tool` / `get_tool_schema` / `lexiang_fetch` /
-`lexiang_search` / `list_tool_categories` / `search_tools`），业务工具**不在可见清单里 → 必须包装**。
-
-⚠️ **别读成「凭证过期」**：`whoami` 直调成功即证明 token 有效；而且「只拒业务工具、同一 token 下包装就通」
+⚠️ **别读成「凭证过期」**：`whoami` 直调成功即证明 token 有效；「只拒业务工具、同一 token 下包装就通」
 这种**选择性**拒绝，机制上不可能由凭证问题产生。
-⚠️ **也别读成「平台永久禁止直调」**：别人的 allowlist 下可能直接可见，那时直调即可。
+⚠️ **也别读成「平台永久禁止直调」**：2026-09-21 已证明那只是**服务端一次可回滚的开关**。
 
 关于 `import_*` 的两点补充：`get_tool_schema` 对它们回 `tool not found`，而对 `entry_list_children`
 正常返回 schema（**不是名字写错**）；18 个连接器类别枚举过，没有 `import_*` 分类。

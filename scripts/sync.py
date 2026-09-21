@@ -117,12 +117,15 @@ class ToolPathUnavailable(RuntimeError):
 #   可见工具清单由 MCP 服务按【company / feature_flag / allowlist】动态过滤，于是
 #     ① 当前可见 tools 里**有**目标业务工具 → 直接调用；
 #     ② **没有**、但 `call_tool` 在 → **必须**经 call_tool 包装（传 tool_name + arguments）。
-# 实测（2026-09-21，个人 token 环境）：
+# 实测与定论（2026-09-21）：
 #   `tools/list` 只回下面这 7 个元工具；直调 entry_* / import_* 回**纯文本**
 #   「tool is not allowed: <工具名>」；同一 token 下直调 whoami 正常、包装调用正常
-#   → 说明是**可见性**差异，不是凭证问题。
-# ⚠️ 不要把这条实测当成「平台禁止直调」：可见性与账号 / 环境有关，别人的 allowlist 下
-#   可能就是能直调的。所以脚本按官方规则**先查可见 tools 再选路径**，两种配置都能跑；
+#   → 是**可见性**差异，不是凭证问题。
+#   **定论（乐享侧 2026-09-21 13:19 确认）**：当天后台加了参数、把大部分工具从 `tools/list`
+#   默认隐藏（agent 看不到就调不到），当日下午已放回、客户端重启后生效
+#   —— 即这是一次**服务端可回滚的开关**，既不是「平台禁止直调」，也不是本地环境差异。
+# ⚠️ 由此得出本脚本的设计前提：**调用路径绝不能写死**。可见集是服务端可调状态，
+#   故按官方规则**先查可见 tools 再选路径**（同一份代码自动适应两种状态），
 #   报错文案（_path_rejected）只作最后兜底。
 META_TOOLS = frozenset([
     "whoami", "call_tool", "get_tool_schema",
