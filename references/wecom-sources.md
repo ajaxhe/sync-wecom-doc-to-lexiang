@@ -30,8 +30,8 @@
 | 智能文档子页 | URL + fragment | `https://doc.weixin.qq.com/smartpage/a1_xxx#page=<pageId>` | ✅ | ✅ 身份锚点（`include_subpages` 下每个子页落成独立子条目） |
 | 微盘文件 | `file_id` | `fi…`（`fi` + 长串，实测 109 字符） | ✅ ⭐ **唯一被接受的微盘形态** | ✅ **已实测 succeed** |
 | 微盘文件 | **分享链接** | `https://drive.weixin.qq.com/s?k=<share_key>` | ❌ **不接受**（须先换成 `file_id`） | ❌ 原样提交实测 `import_failed`（§1.2） |
-| 企微在线表格 sheet | 完整 URL | `https://doc.weixin.qq.com/sheet/<id>` | ⚠️ 未实测 | ⚠️ **未实测**（按同一 provider 路径推断） |
-| 企微智能表格 smartsheet | 完整 URL | `https://doc.weixin.qq.com/smartsheet/s3_ABoA…?scode=…` | ⚠️ 未实测 | ⚠️ **未实测**（`s3_` 前缀系枚举时**观察到**，但**未做 `create` 提交实测**——「观察到」≠「实测成功」） |
+| 企微在线表格 sheet | 完整 URL | `https://doc.weixin.qq.com/sheet/e3_…?scode=…`（实测形态） | ⚠️ 未实测 | ⚠️ **未实测**（按同一 provider 路径推断；`e3_` 与 `type=sheet` 的对应已由枚举对照确认） |
+| 企微智能表格 smartsheet | 完整 URL | `https://doc.weixin.qq.com/smartsheet/s3_…?scode=…` | ⚠️ 未实测 | ⚠️ **未实测**（`s3_` 前缀系枚举时**观察到**，但**未做 `create` 提交实测**——「观察到」≠「实测成功」） |
 | 企微在线文档 doc | 裸 docid | `w3_<docid>` | ✅ | ✅ 已实测 succeed |
 
 ### 🔴 微盘分享链接：服务端不接受该**形态**，必须**先换成 `file_id`**
@@ -88,9 +88,8 @@
 
 - 脚本把 `w3_` / `a1_` / `b1_` 视为**已实测**；其余前缀（`e3_` `s3_` `d3_` `p3_` `f4_` `m4_` `c2_`）
   仅**放行**（避免用户合法粘贴的裸 docid 被误判为「形态非法」），标注为**未实测**，`render_plan` 会打印提示。
-- 注意：**前缀能认出来 ≠ 该形态能导入**。`e3_` / `s3_` 虽已确认与 sheet / smartsheet 对应，但
-  `create` 提交实测尚未做过 —— 仍是「未实测」。
-- 这些前缀**放行 ≠ 验证过能导入**，别当事实引用。
+- ⚠️ **前缀能认出来 ≠ 该形态能导入**：`e3_` / `s3_` 与 sheet / smartsheet 的对应关系已确认，
+  但**从未做过 `create` 提交实测** —— 仍是「未实测」，**放行 ≠ 验证过**。
   → **待验证清单**（含转正所需的测试条件）见 `pitfalls.md` §2.4；team-lead 已裁决**保持「未实测」标注、不转正**。
 
 ### 🔴 枚举里会出现、但**不在提交白名单**的 5 类 `doc_url` 前缀
