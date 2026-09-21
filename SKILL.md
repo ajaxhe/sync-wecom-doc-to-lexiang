@@ -79,12 +79,29 @@ python3 scripts/sync.py status  --profile default          # failed 时必须能
 python3 scripts/sync.py resolve '<乐享目录链接>'            # 只读：解析 space_id / entry_id
 ```
 
+### 同步结果报告（脚本末尾 `── 同步结果 ──` 段）
+
+`create` / `dry-run` 末尾固定输出**三档**，数据**全部取自接口与既有扫描**，脚本不自行判断「文档内容有没有被改过」：
+
+| 档 | 来源 |
+|---|---|
+| ✅ 新增（`add_num`） | 候选归一后未命中目端既有 `source.href.id` |
+| ♻️ 已存在·复用（`special_num`） | 命中既有条目（按既有原始字符串提交 → 幂等复用），报告里带**目端条目名 + 目端链接** |
+| ❌ 失败 | 接口 `failed_items[]` 的 `failed_code` / `failed_reason` |
+
+`dry-run` 额外打一行 `接口计数 add_num/special_num`，与本地匹配数**交叉校验**，不等即告警（说明索引口径与接口不一致，要查）。
+
+⚠️ **接口没有「内容有更新」这一维度**：`import_describe_task` 只回 `status / percentage / total_num / current_num`（dry-run 另回 `dry_run_stats`）。
+所以报告里**不会**出现「有更新」档。要单独列出「有更新的文档」，得先在**导入接口侧**补字段（如条目级 `operation: created|updated|skipped`，
+或回传源端版本号），再在 `render_report` 里加一档 —— **不要**在脚本里自造内容指纹去猜：企微文档 / 智能文档的 API 都不回 mtime
+（只有微盘 `disk files list` 有 `update_time`），猜出来的「有更新」不可靠。详见 `references/import-api.md` 的「报告能取到什么」。
+
 ### 回复模板
 
 ✅ **正常完成**（结论优先，3~6 行）：
 
-> 同步完成：3 条候选全部命中既有条目（**0 新增**），任务 `succeed 3/3`，策略 `skip`。
-> - #1 企微文档 · #2 智能文档 · #3 微盘 mp3 → 均 `MATCHED→复用既有`
+> 同步完成：3 条候选全部命中既有条目（**✅新增 0 / ♻️已存在·复用 3 / ❌失败 0**），任务 `succeed 3/3`，策略 `skip`。
+> - #1 企微文档 · #2 智能文档 · #3 微盘 mp3 → 均已在目标目录（复用，未新建）
 > - task_id `<task_id>`
 >
 > 无需处理。
@@ -275,6 +292,6 @@ profiles/
 
 | 文件 | 内容 | 什么时候读 |
 |---|---|---|
-| `references/import-api.md` | **接口参数全表**（4 必填 + 2 可选 + `files[]` 元素字段 + 校验行为 + 非法值探测方法）、**MCP 调用路径（按可见 tools 选路，2026-09-21 实测）**、去重语义、`dry_run_stats`、异步时序、四条实测口径（`err_message` / `failed_items` / 部分失败 / 计数为 0 不回字段）、`entry_list_children` 分页 | 要改接口调用时 |
+| `references/import-api.md` | **接口参数全表**（4 必填 + 2 可选 + `files[]` 元素字段 + 校验行为 + 非法值探测方法）、**MCP 调用路径（按可见 tools 选路，2026-09-21 实测）**、去重语义、`dry_run_stats`、异步时序、四条实测口径（`err_message` / `failed_items` / 部分失败 / 计数为 0 不回字段）、**⭐ 报告能取到什么（哪些维度接口没有）**、`entry_list_children` 分页 | 要改接口调用时 / 要动报告字段时 |
 | `references/wecom-sources.md` | 企微链接形态表（哪些服务端接受）、**分享链接 → `file_id` 的对话内换法**（本 skill 不做）、不在白名单的 5 类 `doc_url` 前缀、docid 前缀实测 | 要确认某个企微链接形态合不合法 / 用户给了分享链接 |
 | `references/pitfalls.md` | 红线 + 已知限制（含索引只扫一层、未实测形态清单）+ **输出样例与实现约束** + 实测现场记录 | 动 `norm()` 或索引逻辑前**必读**；排查「为什么重复了 / 为什么没匹配上 / 为什么任务 failed」 |

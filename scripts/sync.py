@@ -711,12 +711,49 @@ def build_norm_index(entries, warn=print):
     return index
 
 
+def build_entry_lookup(entries, warn=print):
+    """建 `norm(source.href.id) → {entry_id, name, target_type}` —— 给报告用。
+
+    与 `build_norm_index` **同键同规则**（同一份归一化、同样取 created_at 最早的一条），
+    区别只是携带的信息更多：报告的「已存在·复用」档要打出**目端条目名 + 目端链接**，
+    而 index 里只有 href 字符串。两处必须同规则，否则报告会把标题挂到另一条上。
+    """
+    groups = {}
+    for e in entries:
+        href = (((e.get("source") or {}).get("href")) or {}).get("id")
+        if not href:
+            continue
+        k = norm(href)
+        if not k:
+            continue
+        try:
+            created = int(str(e.get("created_at") or "0"))
+        except ValueError:
+            created = 0
+        groups.setdefault(k, []).append((created, str(e.get("id") or ""), e))
+
+    lookup = {}
+    for k, lst in groups.items():
+        lst.sort(key=lambda t: (t[0], t[1]))
+        node = lst[0][2]
+        lookup[k] = {
+            "entry_id": node.get("id"),
+            "name": node.get("name") or "(未命名)",
+            "target_type": node.get("target_type"),
+        }
+    return lookup
+
+
 # ==========================================================================
 # 提交清单（保真 + 归一匹配）
 # ==========================================================================
 
-def build_plan(cfg, index):
+def build_plan(cfg, index, lookup=None):
     """返回 (files, plan)。
+
+    `lookup`（可选，来自 `build_entry_lookup`）只为报告服务：命中归一索引时把
+    目端既有条目的 `{entry_id, name, target_type}` 挂到 `plan[i]["dst"]`，
+    供 `render_report` 打出「文档名 + 目端链接」。不传则 `dst=None`（输出不受影响）。
 
     失败时返回 (None, (序号, 原始输入, kind, 细节))，由调用方打印错误并 exit 1。
 
@@ -747,6 +784,7 @@ def build_plan(cfg, index):
             "i": i, "result": result, "submit": submit,
             "kind": kind, "label": label, "tested": tested,
             "note": str(c.get("note") or ""),
+            "dst": (lookup or {}).get(k),
         })
         files.append({
             "id": submit,
@@ -813,6 +851,77 @@ def render_plan_summary(plan):
     print("  将新增 : %d 条（add_num）   已存在 : %d 条（special_num）" % (add, matched))
 
 
+def _base_url(cfg):
+    """从 target_url 取 `scheme://host`，用于拼目端条目链接。取不到则返回空串。"""
+    m = re.match(r"^(https?://[^/]+)", str(cfg.get("target_url") or ""))
+    return m.group(1) if m else ""
+
+
+def _short(s, n=88):
+    s = str(s or "")
+    return s if len(s) <= n else s[: n - 1] + "…"
+
+
+def render_report(plan, data, cfg, dry_run=False, task_id=None):
+    """分档结果报告（给人看的那一版）。
+
+    **两档的来源都是接口/既有扫描，脚本不自行判断「文档内容是否被改过」**：
+      · 「新增 / 已存在·复用」= `build_plan` 的归一匹配结果（候选 vs 目端既有 href），
+        与接口 `dry_run_stats.add_num / special_num` 同源同义 —— 报告里把接口计数
+        一并打出来做交叉校验，两边不等就说明匹配索引和接口口径不一致（要查，不能糊过去）。
+      · 「失败」= 接口 `failed_items[]` 的 failed_code / failed_reason。
+
+    ⚠️ 接口**没有**「内容有更新」这一维度：`import_describe_task` 只回
+    `status / percentage / total_num / current_num`（dry-run 另回 `dry_run_stats`），
+    条目级也只有「新建」与「已存在·复用」两种落点。所以本报告**不会**凭空造一个
+    「有更新」档 —— 要那一档，得先让导入接口在回包里给出条目级操作类型（见
+    references/import-api.md「报告能取到什么」）。
+    """
+    new = [p for p in plan if p["result"].startswith("NEW")]
+    matched = [p for p in plan if not p["result"].startswith("NEW")]
+    fails = data.get("failed_items") or []
+    drs = data.get("dry_run_stats") if isinstance(data.get("dry_run_stats"), dict) else {}
+
+    base = _base_url(cfg)
+    if dry_run:
+        print()
+        print("  ── 同步结果预演（dry-run，未写库）──")
+    else:
+        print()
+        print("  ── 同步结果 ──")
+    print("  任务       : %s   %s   %s/%s"
+          % (_short(data.get("__task_id") or task_id or "(未知)", 24), (data.get("status") or "?"),
+             data.get("current_num"), data.get("total_num")))
+
+    def line(p, idx):
+        dst = p.get("dst") or {}
+        name = dst.get("name") or _short(p["submit"], 40)
+        print("    %d. %s" % (idx, name))
+        print("       源端 %s" % _short(p["submit"]))
+        if dst.get("entry_id"):
+            print("       目端 %s/pages/%s" % (base, dst["entry_id"]))
+
+    print("  ✅ 新增 : %d 条%s" % (len(new), "" if new else "（无）"))
+    for i, p in enumerate(new, 1):
+        line(p, i)
+
+    print("  ♻️ 已存在·复用 : %d 条%s" % (len(matched), "" if matched else "（无）"))
+    for i, p in enumerate(matched, 1):
+        line(p, i)
+
+    print("  ❌ 失败 : %d 条%s" % (len(fails), "" if fails else "（无）"))
+    for f in fails:
+        print("    - %s" % (f.get("name") or f.get("id")))
+        print("       failed_code=%s  reason=%s" % (f.get("failed_code"), f.get("failed_reason")))
+
+    if drs:
+        add_num, special_num = drs.get("add_num") or 0, drs.get("special_num") or 0
+        print("  接口计数   : add_num=%s  special_num=%s" % (add_num, special_num))
+        if (add_num, special_num) != (len(new), len(matched)):
+            print("  ⚠️ 口径不符 : 本地匹配（新增 %d / 已存在 %d）与接口计数不一致，"
+                  "请加 --debug 核对 sync.log" % (len(new), len(matched)))
+
+
 # ==========================================================================
 # 子命令
 # ==========================================================================
@@ -868,7 +977,8 @@ def _prepare(ctx, cfg):
         return None, None, 1
     print("  既有扫描   : entry_list_children → %d 条" % len(existing))
     index = build_norm_index(existing)
-    files, plan = build_plan(cfg, index)
+    lookup = build_entry_lookup(existing)
+    files, plan = build_plan(cfg, index, lookup)
     if files is None:
         i, raw, kind, detail = plan
         if kind in REJECTED_KINDS:
@@ -931,6 +1041,8 @@ def _submit_and_poll(ctx, cfg, files, dry_run, wait):
             print("  状态       : %s   进度 %s/%s" % (st, data.get("current_num"), data.get("total_num")))
             render_stats(data)
         if st in FINAL_STATES:
+            # 带上本次任务号：dry_run 不写缓存，报告里若只靠 read_cache 会显示上一次的任务 id
+            data["__task_id"] = task_id
             return data, 0
         time.sleep(POLL_INTERVAL)
 
@@ -973,6 +1085,7 @@ def do_dry_run(ctx, cfg):
         return rc
     render_entries(data)
     render_failures(data)
+    render_report(plan, data, cfg, dry_run=True, task_id=read_cache(ctx))
     if (data.get("status") or "").strip() == "failed":
         print_auth_hint()
     return 0
@@ -1005,6 +1118,7 @@ def do_create(ctx, cfg, wait=True):
         return 0
     render_entries(data)
     render_failures(data)
+    render_report(plan, data, cfg, dry_run=False, task_id=read_cache(ctx) or task_id)
     if (data.get("status") or "").strip() == "failed":
         total = data.get("total_num")
         n_fail = len(data.get("failed_items") or [])

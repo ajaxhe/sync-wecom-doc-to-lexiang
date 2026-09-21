@@ -232,6 +232,29 @@ code=51 validate proto message: validation error:
 → `None` 等价于 `0`，**展示时应归一成 0**，否则用户看到 `None` 会以为「服务端没算」。
 判断「本次会不会新增」看 `add_num`（归一后）即可。
 
+### ⭐ 报告能取到什么（`render_report` 三档字段的全部来源，2026-09-21 实测）
+
+| 报告项 | 数据来源 | 备注 |
+|---|---|---|
+| ✅ 新增 N 条 | 本地归一匹配 `NEW→原样提交`；`dry-run` 用 `dry_run_stats.add_num` 交叉校验 | **真跑任务不回 `dry_run_stats`**，真跑时只有本地匹配计数 |
+| ♻️ 已存在·复用 M 条 | 本地归一匹配 `MATCHED→复用既有`；`dry-run` 用 `special_num` 交叉校验 | 目端**条目名 + 链接**来自 `entry_list_children`，接口不回 |
+| ❌ 失败 K 条 | `failed_items[]`（`failed_code` / `failed_reason`） | 见上方实测口径 ①②③ |
+| 任务终态 / 进度 | `status` / `total_num` / `current_num` | 真跑与 dry-run 都回 |
+
+**接口没有的维度 —— 不要在脚本里造：**
+
+- **条目级操作类型**：回包里既无 `entries[]`（2026-09-21 三次真跑均未回），也无 `operation / created / updated / skipped` 之类字段。
+  `render_entries()` 的 `entries[]` 分支属**兼容性保留**（早期实测出现过该字段），现网不保证有。
+- **「内容有更新」**：`special_num` 只表示「字节命中既有条目」，**既不代表源端内容变过，也不代表服务端会去更新它**。
+  `skip` 档实测证据：源端智能文档某页被加了一段文字 → 重跑 `create` → 目端主条目与 5 个子条目的
+  `edited_at` / `source.content_version` **全未变**，该页在目端仍为空。
+- **源端版本号 / 修改时间**：企微侧 `doc contents get` 不回 mtime、`smartpage pages get` 不回 mtime；
+  只有微盘 `disk files list` 有 `update_time`（它等于 `create_time` 时说明文件从未被改过）。
+
+→ 要「单独列出有更新的文档」，只能在**接口侧**补字段（例如回 `operation: created|updated|skipped`，或回传源端 `version/hash`）。
+**不做**客户端自造内容指纹（每次抓全文算 hash）：三类资产抓法各异、正文含图片块时 hash 不稳定，
+且会把「抓源端内容」变成 skill 的隐式前置条件（与红线 1 冲突）。
+
 ---
 
 ## 4. 去重语义（幂等的地基）
