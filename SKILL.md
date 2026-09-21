@@ -1,10 +1,10 @@
 ---
-name: sync-wecom_doc-to-lexiang
+name: sync-wecom-doc-to-lexiang
 description: 把【企业微信 / 企微】知识库资产（在线文档 doc / smartpage / sheet / smartsheet + 微盘文件）批量、增量地【导入】【同步】到【乐享】知识库指定目录。走乐享 MCP 的 import_create_task / import_describe_task 直连服务端导入任务，服务端自己抓正文、图片与文件，Agent 侧无需读正文、无需上传文件。**候选只能填服务端直接接受的形态**：在线文档 / 智能文档 / 表格贴完整 URL（含 ?scode=），微盘填 file_id（fi… 长串）—— 微盘分享链接不被服务端接受，需先在对话中换成 file_id。本 skill 的职责只有三件事：**引导配置 → 执行脚本 → 告知结果**（不维护任何中间状态、不追踪目的端增删）。首选 scripts/sync.py 脚本（多 profile 隔离、任务 id 缓存、--debug 日志）；resolve 子命令把乐享目录链接解析成 space_id / entry_id（引导配置用，只读不改配置）；**本 skill 不碰企微侧**（不枚举企微候选、不做 ID 换算、不调用任何企微侧工具）；**使用前提：该乐享企业已在乐享页面完成「授权配置」**（未完成或已过期会让导入失败）。当用户提到企微、企业微信、WeCom、微盘、微盘分享链接、企微知识库、企微文档、乐享、导入、同步、增量导入、批量导入时使用本 skill。profiles/ 含密钥与日志，绝不可提交到代码托管平台。
 agent_created: true
 ---
 
-# sync-wecom_doc-to-lexiang
+# sync-wecom-doc-to-lexiang
 
 ## 本 skill 干什么 / 不干什么（先读这条，能省掉大半无效工作）
 

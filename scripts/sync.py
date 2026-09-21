@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-sync-wecom_doc-to-lexiang —— 把企微知识库资产（在线文档 + 微盘文件）批量 + 增量导入乐享指定目录。
+sync-wecom-doc-to-lexiang —— 把企微知识库资产（在线文档 + 微盘文件）批量 + 增量导入乐享指定目录。
 
 零第三方依赖（仅 Python 标准库，不需要装任何 pip 包）。
 多 profile 隔离：profiles/<name>/{config.json,.task_id.cache,sync.log}。
@@ -149,7 +149,7 @@ _VISIBLE_TOOLS = {}
 
 
 CONFIG_TEMPLATE = {
-    "_comment": "sync-wecom_doc-to-lexiang profile 配置。含密钥，切勿提交（profiles/ 已 gitignore）。"
+    "_comment": "sync-wecom-doc-to-lexiang profile 配置。含密钥，切勿提交（profiles/ 已 gitignore）。"
                 "候选**只填 id 就够**。可选字段（都可省略，省略即取默认）："
                 "candidates[].key（身份归一覆盖值，默认空）、"
                 "candidates[].include_subpages（默认取 source.include_subpages，后者默认 true）、"
