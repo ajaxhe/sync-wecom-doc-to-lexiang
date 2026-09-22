@@ -176,7 +176,7 @@ python3 scripts/sync.py resolve '<乐享目录链接>'            # 只读：解
 | ① 乐享**目标目录**链接 | 让用户从乐享页面复制（`https://<租户>.lexiangla.com/pages/<32位id>`） | **只问链接，不要问 `space_id`** —— 用 `resolve` 自动解析 |
 | ② 要同步的**企微资产**标识 | 在线文档 / 智能文档 / 表格：从企微界面复制**完整 URL**（含 `?scode=`）；微盘：复制**分享链接**（`https://drive.weixin.qq.com/s?k=…`，含 `?k=`） | 一条一个，**原样粘贴不要手改**（不要换成 docid / file_id） |
 | ③ 冲突策略 | 默认 `skip`；只解释差异，不替用户决定 | 目标目录里若还有别的内容，`replace` 会删掉它们 |
-| ④ MCP Token | 用户从 `https://lexiangla.com/ai/claw` 取 | 只写进 config：**绝不回显、绝不写进报告** |
+| ④ MCP Token | **先自动获取，问不问看条件**：Agent 宿主（WorkBuddy / CodeBuddy）已连接「乐享知识库」连接器 → `config.json` 的 `mcp_token` **留空 `""` 即可**，脚本运行时自动从宿主连接器配置（`CODEBUDDY_MCP_CONFIG`）取凭证，**不要让用户贴 token**；仅当**未集成连接器**时，才让用户从 `https://lexiangla.com/ai/claw` 取并填入 | 手填只进 config：**绝不回显、绝不写进报告**；自动凭证是会话级的，**脚本实时读取、不落盘**（定时任务等宿主不在的环境走手填） |
 
 ### 首次初始化（4 步）
 
@@ -193,7 +193,8 @@ python3 scripts/sync.py init --profile <任务名>
 python3 scripts/sync.py resolve '<用户给的乐享目录链接>'
 
 # ③ Agent 编辑 profiles/<任务名>/config.json：
-#    auth.mcp_token ← 用户给的 token
+#    auth.mcp_token ← 留空 ""（Agent 宿主已连接乐享连接器时脚本自动获取凭证）；
+#                     仅未集成连接器时才填用户手贴的 token
 #    target         ← 上一步打印的那段（含 space_id / parent_entry_id）
 #    source.candidates ← 源端链接原文，一条一个 { "id": "…" }（微盘填分享链接，原样）
 
@@ -230,7 +231,8 @@ profiles/
 
 ```jsonc
 {
-  "auth": { "endpoint": "https://mcp.lexiang-app.com/mcp", "mcp_token": "lxmcp_…", "request_timeout": 30 },
+  "auth": { "endpoint": "https://mcp.lexiang-app.com/mcp", "mcp_token": "", "request_timeout": 30 },
+  //                     ^ mcp_token 留空 = 自动从 Agent 宿主乐享连接器取凭证；未集成连接器时才手填 "lxmcp_…"
   "source": {
     "type": "wecombot",              // 固定值（实测唯一支持）
     "conflict_strategy": "skip",     // 可选；skip（默认，安全）/ replace / keep_both
@@ -307,7 +309,9 @@ profiles/
 | 任务 `failed` 但 `err_message` 只有一句泛化文案 | 真正原因在 `failed_items[].failed_reason`，脚本已逐条打印。**注意失败项不在 `entries[]` 里**，且部分失败 = 整任务 `failed` |
 | `dry_run_stats` 出现 `None` | 计数为 0 时服务端不回该字段，脚本已归一成 `0` |
 | `create` 跑完**没有** `服务端统计` 一行 | 正常 —— `dry_run_stats` **仅 `dry_run=true` 时才有**（见 `references/import-api.md`），真跑任务不回该字段。定时任务报告里这一项应写「未回传 / 按规则等价 0」，或改用客户端 `候选提交保真清单` 的 `MATCHED→复用既有 / NEW→原样提交` 计数（二者口径不同，别混着说） |
-| 鉴权失败 / 401 | 先按 token 处理：`auth.mcp_token` 无效或过期，从 `https://lexiangla.com/ai/claw` 重新获取。**换 token 后仍失败** → 是乐享侧「授权配置」未完成或已过期，把授权文档给用户（见「配置引导」前置节） |
+| 报「缺少乐享 MCP 凭证」 | 两条路二选一：① Agent 宿主连接「乐享知识库」连接器（`mcp_token` 留空即可，脚本自动获取）；② 手填 `auth.mcp_token`（获取：`https://lexiangla.com/ai/claw`）。**先看宿主有没有集成连接器再决定问不问用户** |
+| 鉴权失败 / 401（走手填 token） | `auth.mcp_token` 无效或过期，从 `https://lexiangla.com/ai/claw` 重新获取。**换 token 后仍失败** → 是乐享侧「授权配置」未完成或已过期，把授权文档给用户（见「配置引导」前置节） |
+| 鉴权失败 / 401（`mcp_token` 留空、走连接器自动凭证） | **不是 config 的问题**：连接器授权过期或宿主未运行 → 让用户在连接器管理页重新连接「乐享知识库」后重试；或临时改走手填 token |
 | 导入任务 `failed`，原因指向**授权**（未完成 / 已过期） | **不要改 config、不要换 token、不要改候选** —— 这是乐享侧的授权问题，不是本 skill 的参数问题。把授权文档给用户，由其在乐享页面完成授权后重跑 |
 | 报 `tool is not allowed: xxx` | **不要改 config、不要换 token、也不要改脚本里的路径** —— 只说明服务端本次下发（`tools/list`）里没有它（后台开关 / allowlist 都会导致），脚本会自动改走 `call_tool` 包装。判凭证是否有效只需直调一次 `whoami`（成功即有效）。想让直调恢复是要**乐享侧放回 + 客户端重启**，本地别绕 |
 | 目录扫描失败 | 脚本**主动中止**、不提交任何任务 —— 这是有意的：跳过匹配强行提交会制造重复 |

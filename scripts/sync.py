@@ -9,7 +9,20 @@ sync-wecom-doc-to-lexiang —— 把企微知识库资产（在线文档 + 微�
 前置条件（都在乐享侧完成，本脚本只指路、不代劳）：
     · 该乐享企业/账号已完成「授权配置」—— 导入能跑通的前提；未完成或已过期会让导入失败。
       授权文档：https://lexiangla.com/pages/d4a717fbf4604efea4bd286fdcdac31a?company_from=906ba45e6f9a11f089c57a2a2b4bccb6
-    · config.json 已填该账号 MCP Token（获取：https://lexiangla.com/ai/claw）。
+    · 乐享 MCP 凭证（二选一，**自动发现优先**，见下节）。
+
+凭证来源（优先级从高到低，2026-09-22 新增自动发现）：
+    ① config.json 的 auth.mcp_token（手填，获取：https://lexiangla.com/ai/claw）
+       —— 写死在配置里，可跨会话 / 供定时任务使用；填了就优先用它。
+    ② **自动发现**：mcp_token 留空时，脚本从环境变量 `CODEBUDDY_MCP_CONFIG` 里找
+       Agent 宿主（WorkBuddy / CodeBuddy）已连接的「乐享知识库」连接器条目
+       （mcpServers 下名字含 "lexiang" 的），直接使用它下发的本地代理 URL + 认证头
+       （真实 token 由宿主的代理在上游注入，**明文 token 不落盘、不进 config、不进日志**）。
+       2026-09-22 实测：认证头 Authorization 与 X-WorkBuddy-MCP-Context 缺一不可（缺后者 401）；
+       可见工具集与手填 token 完全一致（7 个元工具）。
+       ⚠️ 该凭证是**会话级**的：代理端口 / context 头随宿主会话变化，脚本**每次运行时实时读取**，
+          绝不缓存到 config.json —— 所以定时任务 / 宿主未运行的环境请走 ① 手填。
+    ③ 两者都没有 → 报明确错误并 exit 1，绝不降级 mock。
 
 用法：
     python3 scripts/sync.py init    [--profile NAME]              # 生成 profile 配置模板 + profiles/.gitignore
@@ -174,6 +187,14 @@ DEFAULT_LEXIANG_ORIGIN = os.environ.get("LEXIANG_ORIGIN", "https://lexiangla.com
 # MCP Token 获取页（乐享 AI 页面）。
 TOKEN_URL = "https://lexiangla.com/ai/claw"
 
+# Agent 宿主连接器配置的环境变量名：WorkBuddy / CodeBuddy 集成「乐享知识库」连接器后，
+# 宿主会把它下发给子进程。mcpServers 下名字含 "lexiang" 的条目带着本地代理 URL + 认证头。
+# 脚本在 mcp_token 留空时从这里自动发现凭证（见文件头「凭证来源」一节）。
+CONNECTOR_ENV_VAR = "CODEBUDDY_MCP_CONFIG"
+# 自动发现时**只透传**这两个认证头（实测缺 X-WorkBuddy-MCP-Context 会被代理 401）；
+# 其余头一律丢弃，避免把宿主会话的无关上下文带进请求。
+CONNECTOR_AUTH_HEADER_KEYS = ("authorization", "x-workbuddy-mcp-context")
+
 # 乐享侧「授权配置」官方文档 —— **导入的前置条件**：未完成或已过期会让导入任务失败。
 # ⚠️ 这是**对外公开的产品文档链接**，不是本机/个人资源：skill 发布到代码托管平台时**保留**，
 #    脱敏扫描请把本常量列入白名单（URL 里的 32 位串是文档 entry_id 与该企业的 company_from 参数）。
@@ -185,12 +206,15 @@ _VISIBLE_TOOLS = {}
 
 CONFIG_TEMPLATE = {
     "_comment": "sync-wecom-doc-to-lexiang profile 配置。含密钥，切勿提交（profiles/ 已 gitignore）。"
+                "auth.mcp_token 留空 \"\" 即可 —— Agent 宿主（WorkBuddy / CodeBuddy）已连接"
+                "「乐享知识库」连接器时，脚本会自动获取凭证；仅未集成连接器时才需要手填"
+                "（获取：https://lexiangla.com/ai/claw）。"
                 "候选**只填 id 就够**。可选字段（都可省略，省略即取默认）："
                 "candidates[].key（文档名称，选填，随请求体 files[].key 提交；企微侧无法通过 URL 反查 doc 类型文档名称，尽量在初始化时填好）、"
                 "candidates[].include_subpages（默认取 source.include_subpages，后者默认 true）。",
     "auth": {
         "endpoint": "https://mcp.lexiang-app.com/mcp",
-        "mcp_token": "lxmcp_在此填入个人MCP Token",
+        "mcp_token": "",
         "request_timeout": 30,
     },
     "source": {
@@ -243,6 +267,64 @@ def _mask_token(token):
     return token[:10] + "***" + token[-4:]
 
 
+def _mask_header(value):
+    """认证头打码（值可能是 `Bearer xxx` 也可能是裸 token）：整体只留前 10 + 末 4。"""
+    return _mask_token(str(value or ""))
+
+
+def discover_connector_auth():
+    """从 Agent 宿主（WorkBuddy / CodeBuddy）的连接器配置里**自动发现**乐享 MCP 凭证。
+
+    背景（2026-09-22）：Agent 已集成「乐享知识库」连接器时，宿主通过环境变量
+    `CODEBUDDY_MCP_CONFIG` 向子进程下发 MCP 配置；其中 `mcpServers` 下名字含
+    "lexiang" 的条目带着：
+      · url     —— 宿主本地透明代理地址（真实 token 由代理在上游注入，明文不落盘）；
+      · headers —— Authorization + X-WorkBuddy-MCP-Context（实测缺一不可，缺后者 401）。
+
+    返回 {"endpoint": <代理url>, "headers": <过滤后的认证头>}；未集成 / 未连接 /
+    解析失败一律返回 None —— 调用方退回「手填 token」路径，**绝不报错、绝不降级 mock**。
+
+    ⚠️ 安全：返回的 headers 是会话级凭证 —— 绝不写入 config.json、绝不缓存、
+       绝不明文进日志（debug 日志统一走 _mask_header 打码）。
+    """
+    raw = os.environ.get(CONNECTOR_ENV_VAR, "").strip()
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    servers = data.get("mcpServers") or {}
+    if not isinstance(servers, dict):
+        return None
+    for name, sc in servers.items():
+        if "lexiang" not in str(name or "").lower():
+            continue
+        sc = sc if isinstance(sc, dict) else {}
+        url = str(sc.get("url") or "").strip()
+        headers = {}
+        for k, v in (sc.get("headers") or {}).items():
+            if str(k).lower() in CONNECTOR_AUTH_HEADER_KEYS and v:
+                headers[str(k)] = str(v)
+        has_auth = any(k.lower() == "authorization" for k in headers)
+        if url.startswith("http") and has_auth:
+            return {"endpoint": url, "headers": headers}
+    return None
+
+
+def auth_error_hint(cfg):
+    """鉴权失败时按**当前凭证来源**给对应建议（手填 token 与连接器自动发现的修复路径不同）。"""
+    if cfg.get("auth_via") == "connector":
+        return ("当前凭证来自 Agent 宿主的「乐享知识库」连接器（自动发现）。\n"
+                "  · 可能连接器授权已过期 / 未连接：请在 WorkBuddy / CodeBuddy 的连接器管理页"
+                "重新连接「乐享知识库」后重试；\n"
+                "  · 或改走手填路径：在 config.json 的 auth.mcp_token 填入个人 MCP Token"
+                "（获取：%s）。" % TOKEN_URL)
+    return "先在 config.json 更新 auth.mcp_token（重新获取：%s）。" % TOKEN_URL
+
+
 def print_auth_hint(stream=None, indent="  "):
     """打印「去乐享页面完成授权」的引导 —— 全脚本**唯一出口**（避免同一段文案在多处漂移）。
 
@@ -264,15 +346,20 @@ def debug_log(ctx, *lines):
             f.write(ln + "\n")
 
 
-def build_curl(endpoint, token, body_str):
+def build_curl(endpoint, cfg, body_str):
     safe_body = body_str.replace("'", "'\\''")
+    if cfg.get("token"):
+        auth_shown = "Bearer " + _mask_token(cfg["token"])
+    else:
+        auth_shown = _mask_header((cfg.get("extra_headers") or {}).get("Authorization")
+                                  or (cfg.get("extra_headers") or {}).get("authorization") or "")
     return (
         "curl -s -X POST \"%s\" \\\n"
         "  -H \"Content-Type: application/json\" \\\n"
         "  -H \"Accept: application/json\" \\\n"
-        "  -H \"Authorization: Bearer %s\" \\\n"
+        "  -H \"Authorization: %s\" \\\n"
         "  -d '%s'"
-    ) % (endpoint, _mask_token(token), safe_body)
+    ) % (endpoint, auth_shown, safe_body)
 
 
 # ==========================================================================
@@ -458,16 +545,42 @@ def load_config(ctx):
     auth = cfg.get("auth", {}) or {}
     src = cfg.get("source", {}) or {}
     tgt = cfg.get("target", {}) or {}
-    token = str(auth.get("mcp_token") or "")
+    token = str(auth.get("mcp_token") or "").strip()
     space_id = str(tgt.get("space_id") or "")
     parent = str(tgt.get("parent_entry_id") or "")
     candidates = src.get("candidates") or []
 
-    joined = token + space_id + parent + json.dumps(candidates, ensure_ascii=False)
-    if "在此填入" in joined or not token or not space_id or not parent:
-        print("profile 「%s」的 config.json 仍是初始化模板：请填 auth.mcp_token / source.candidates / target 后再运行。\n"
-              "获取 token：%s" % (ctx.profile, TOKEN_URL), file=sys.stderr)
+    non_auth_joined = space_id + parent + json.dumps(candidates, ensure_ascii=False)
+    if "在此填入" in non_auth_joined or not space_id or not parent:
+        print("profile 「%s」的 config.json 仍是初始化模板：请填 source.candidates / target 后再运行。"
+              % ctx.profile, file=sys.stderr)
         sys.exit(1)
+
+    # 凭证解析（优先级见文件头「凭证来源」）：
+    #   ① 手填 auth.mcp_token —— 非空且非占位符即采用（跨会话 / 定时任务友好）；
+    #   ② 留空或占位符 → 尝试从 Agent 宿主连接器自动发现（CODEBUDDY_MCP_CONFIG）；
+    #   ③ 都没有 → 给出两条修复路径并 exit 1（绝不降级 mock）。
+    placeholder = ("在此填入" in token) or (token == "lxmcp_在此填入个人MCP Token")
+    discovered = None
+    if not token or placeholder:
+        token = ""
+        discovered = discover_connector_auth()
+    if not token and not discovered:
+        print("profile 「%s」缺少乐享 MCP 凭证，二选一：\n"
+              "  ① （推荐，0 配置）在 WorkBuddy / CodeBuddy 连接并启用「乐享知识库」连接器，\n"
+              "     脚本会自动从宿主配置获取凭证（auth.mcp_token 留空即可）；\n"
+              "  ② 手动填 config.json 的 auth.mcp_token（获取：%s）。\n"
+              % (ctx.profile, TOKEN_URL), file=sys.stderr)
+        sys.exit(1)
+
+    if discovered:
+        endpoint = discovered["endpoint"]
+        extra_headers = discovered["headers"]
+        auth_via = "connector"
+    else:
+        endpoint = auth.get("endpoint") or "https://mcp.lexiang-app.com/mcp"
+        extra_headers = {}
+        auth_via = "config_token"
 
     if not candidates:
         print("profile 「%s」的 source.candidates 为空：至少放一条候选。%s"
@@ -493,8 +606,10 @@ def load_config(ctx):
         sys.exit(1)
 
     return {
-        "endpoint": auth.get("endpoint") or "https://mcp.lexiang-app.com/mcp",
+        "endpoint": endpoint,
         "token": token,
+        "extra_headers": extra_headers,
+        "auth_via": auth_via,
         "timeout": timeout,
         "type": src.get("type") or "wecombot",
         "include_subpages": bool(src.get("include_subpages", True)),
@@ -540,20 +655,30 @@ def _rpc_post(ctx, cfg, payload, path):
         {"meta": "元工具，直接调用",
          "wrapped": "经 call_tool 包装调用",
          "direct": "直调（该业务工具在当前可见 tools 里）"}.get(path, str(path)),
+        "--- 凭证来源 ---",
+        ("config.json auth.mcp_token（手填）" if cfg.get("auth_via") == "config_token"
+         else "Agent 宿主乐享连接器自动发现（CODEBUDDY_MCP_CONFIG，会话级凭证）"),
         "--- 请求体 (JSON-RPC) ---",
         body_str,
-        "--- 等价 curl (token 已打码) ---",
-        build_curl(cfg["endpoint"], cfg["token"], body_str),
+        "--- 等价 curl (认证信息已打码) ---",
+        build_curl(cfg["endpoint"], cfg, body_str),
     )
+
+    # 认证头：手填 token → Bearer <token>；连接器自动发现 → 原样透传宿主下发的认证头
+    # （Authorization + X-WorkBuddy-MCP-Context，代理缺后者会 401）。
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    for k, v in (cfg.get("extra_headers") or {}).items():
+        headers[k] = v
+    if cfg.get("token"):
+        headers["Authorization"] = "Bearer " + cfg["token"]
 
     req = urllib.request.Request(
         cfg["endpoint"],
         data=body_str.encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "Authorization": "Bearer " + cfg["token"],
-        },
+        headers=headers,
         method="POST",
     )
     try:
@@ -565,10 +690,10 @@ def _rpc_post(ctx, cfg, payload, path):
         if e.code in (401, 403):
             raise AuthError(
                 "乐享鉴权失败（HTTP %s）。\n"
-                "  · 先在 config.json 更新 auth.mcp_token（重新获取：%s）。\n"
+                "  · %s\n"
                 "  · 若更新后仍失败，可能是乐享侧「授权配置」未完成或已过期 —— "
                 "按此文档在乐享页面完成授权：\n"
-                "    %s" % (e.code, TOKEN_URL, AUTH_DOC_URL))
+                "    %s" % (e.code, auth_error_hint(cfg), AUTH_DOC_URL))
         raise RuntimeError("调用乐享 MCP 失败：HTTP %s %s" % (e.code, body[:300]))
     except AuthError:
         raise
@@ -643,10 +768,10 @@ def _mcp_post(ctx, cfg, tool_name, arguments, req_id, path="meta"):
         if "unauthorized" in low or "invalid token" in low or inner.get("code") in (401, 403):
             raise AuthError(
                 "乐享鉴权失败（token 无效或过期）。\n"
-                "  · 先在 config.json 更新 auth.mcp_token（重新获取：%s）。\n"
+                "  · %s\n"
                 "  · 若更新后仍失败，可能是乐享侧「授权配置」未完成或已过期 —— "
                 "按此文档在乐享页面完成授权：\n"
-                "    %s" % (TOKEN_URL, AUTH_DOC_URL))
+                "    %s" % (auth_error_hint(cfg), AUTH_DOC_URL))
         return inner
     if isinstance(result.get("structuredContent"), dict):
         return {"code": 0, "data": result["structuredContent"]}
@@ -1003,8 +1128,9 @@ def do_init(ctx):
         with open(ctx.config_path, "w", encoding="utf-8") as f:
             json.dump(CONFIG_TEMPLATE, f, ensure_ascii=False, indent=2)
         print("已创建 profile 「%s」：%s" % (ctx.profile, ctx.config_path))
-        print("请编辑该文件，填入 auth.mcp_token / source.candidates / target 后再运行 create。")
-        print("获取 mcp_token：访问 %s" % TOKEN_URL)
+        print("请编辑该文件，填入 source.candidates / target 后再运行 create。")
+        print("凭证：Agent 宿主已连接「乐享知识库」连接器 → mcp_token 留空即可（脚本自动获取）；"
+              "否则手填个人 MCP Token（获取：%s）。" % TOKEN_URL)
         print_auth_hint(stream=sys.stdout, indent="")
     print("提示：profiles/ 已写入 .gitignore，切勿提交到任何代码托管平台。")
 
