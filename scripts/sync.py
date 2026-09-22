@@ -55,10 +55,8 @@ MCP 调用路径（走哪条**由当前可见 tools 决定**，不遵守会让�
     ⚠️ **不传该字段时，服务端默认行为是破坏性的**（实测：一次 create 把目标目录原有 10 条条目、
        含 7 条与本批无关的，裁成本次提交的 3 条）→ 脚本**绝不省略**这个字段。详见 references/pitfalls.md §2.9。
 
-退出码：0 成功（含「已有进行中任务 → 静默退出」，供定时任务复用；
-        含任务 failed 但未成功项全部为内容提示类失败码（BENIGN_FAILED_CODES，
-        如 video_content_empty —— 文件已导入成功，仅内容处理为空/受限，2026-09-22 用户裁决））；
-        1 运行期失败（鉴权失效 / 任务 failed 且存在真失败项（**含接口判「非法的 'file_id'」等形态问题**）/
+退出码：0 成功（含「已有进行中任务 → 静默退出」，供定时任务复用）；
+        1 运行期失败（鉴权失效 / 任务 failed（**含接口判「非法的 'file_id'」等形态问题**）/
                      任务到终态但条目排空超时（仍有条目处理中 → 输出「等全部处理完再汇总」的 Agent 指令）/
                      凭证缺失 / 目录扫描失败 / 网络异常 / 轮询超时）；
         2 用法错误（未知命令、缺参数）。
@@ -66,6 +64,9 @@ MCP 调用路径（走哪条**由当前可见 tools 决定**，不遵守会让�
 🔴 四条不变式（改代码前务必先读 references/pitfalls.md）：
    0. **脚本不做任何判断逻辑** —— 不预判候选能不能导入、不按类型拦截、不因「形态不认识」而中止。
       候选**原样提交**，服务端怎么判就怎么回传；接口的**原始信息与错误**交回给 Agent 组织话术。
+      **回包侧同理（2026-09-22 用户裁决）**：接口返回成功即成功、返回失败即失败（照实报 failed_code /
+      failed_reason 原文）—— **不判断**文档/文件内容是否为空、不解释「这个失败其实文件已导入」、
+      不给任何失败码开「其实算成功」的白名单。skill 只有三件事：引导配置 → 执行脚本 → 告知结果。
       ⚠️ 严禁把「某类型不可导入 / 已实测 / 未实测」这类**我们的推断**写回代码（历史教训见 pitfalls.md §2.4）。
       ⚠️ **免升级设计（不可违反）**：接口将来支持**新的文档类型**时，本 skill **必须不改一行就能用** ——
          用户更新 skill 是**不确定行为**，不能把「支持新类型」寄托在用户升级上。
@@ -113,23 +114,10 @@ def pending_entries(data):
     return [e for e in (data.get("entries") or []) if _is_item_pending(e)]
 
 
-# 「文件已导入成功、仅内容处理为空/受限」类失败码 —— **不计失败**（2026-09-22 用户裁决 2）：
-# 标准录音 1.mp3 服务端报 video_content_empty，但文件实际已成功导入（乐享端可见）；
-# 「音频内容是否为空」属服务端内容处理层，不是导入 skill 该管的事 → 按成功口径汇报。
-# 注意：这是**回包结果**的分档（不影响提交什么），与不变式 0「不按候选类型分叉」不冲突。
-# code 或 reason 精确命中即算（entries[].status 里 code 常为 None、只有 reason）。
-BENIGN_FAILED_CODES = {"video_content_empty"}
-
-
-def _is_benign(code, reason):
-    return (code or "").strip() in BENIGN_FAILED_CODES or (reason or "").strip() in BENIGN_FAILED_CODES
-
-
-def split_failed_items(fails):
-    """把 failed_items[] 分成（真失败, 内容提示）。"""
-    real = [f for f in fails if not _is_benign(f.get("failed_code"), f.get("failed_reason"))]
-    benign = [f for f in fails if _is_benign(f.get("failed_code"), f.get("failed_reason"))]
-    return real, benign
+# 🔴 成败口径（2026-09-22 用户裁决，最高纲领）：**接口说什么就是什么**。
+# 接口返回导入成功 → 就是成功；接口返回失败（failed_items[] / failed_code+failed_reason）→ 就是失败，照实报原因。
+# **不判断**文档/文件内容是否为空、不解释「这个失败其实文件已经导入」——那是替服务端做内容判断，
+# 一律禁止（历史教训：video_content_empty 曾被分档为「已导入·内容提示」，2026-09-22 晚已裁决删除）。
 
 # 轮询上限：60 次 × 3s = 180s。超时即 exit 1，绝不无限轮询（主理人硬规格 #3）
 POLL_INTERVAL = 3
@@ -892,9 +880,6 @@ def render_entries(data):
         href = (((e.get("source") or {}).get("href")) or {})
         st = e.get("status") or {}
         label = st.get("status", "?")
-        # 条目级 failed 但 reason 属内容提示类（如 video_content_empty）→ 文件其实已导入成功
-        if label == "failed" and _is_benign(st.get("failed_code"), st.get("failed_reason")):
-            label = "已导入·内容提示"
         extra = ("  reason=%s" % st.get("failed_reason")) if st.get("failed_reason") else ""
         print("    - [%s] %s  href.id=%s%s" % (
             label, e.get("name", ""), href.get("id", "(none)"), extra))
@@ -903,24 +888,17 @@ def render_entries(data):
 def render_failures(data):
     """打印 `failed_items[]` —— 顶层 `err_message` 只有一句泛化文案（「导入失败，请查看失败文档」），
     真正的原因（failed_code / failed_reason）在这个数组里。不打印它 = 用户排不了障。
-    内容提示类失败码（BENIGN_FAILED_CODES，如 video_content_empty）单列 —— 文件已导入成功，不计失败。"""
+    🔴 接口口径：出现在 failed_items[] 里就是失败，逐条原样打印，不做任何解释或分档。"""
     fails = data.get("failed_items") or []
     if not fails:
         return
-    real, benign = split_failed_items(fails)
-    if benign:
-        print("  ⚠️ 内容提示（文件已导入成功，不计失败）:")
-        for f in benign:
-            print("    - %s" % (f.get("name") or f.get("id")))
-            print("      failed_code=%s  reason=%s" % (f.get("failed_code"), f.get("failed_reason")))
-    if real:
-        print("  未成功项（failed_items）:")
-        for f in real:
-            print("    - id=%s" % f.get("id"))
-            if f.get("name") and f.get("name") != f.get("id"):
-                print("      name=%s" % f.get("name"))
-            print("      failed_code=%s" % f.get("failed_code"))
-            print("      reason=%s" % f.get("failed_reason"))
+    print("  未成功项（failed_items）:")
+    for f in fails:
+        print("    - id=%s" % f.get("id"))
+        if f.get("name") and f.get("name") != f.get("id"):
+            print("      name=%s" % f.get("name"))
+        print("      failed_code=%s" % f.get("failed_code"))
+        print("      reason=%s" % f.get("failed_reason"))
 
 
 def render_stats(data):
@@ -953,13 +931,12 @@ def _short(s, n=88):
 def render_report(plan, data, cfg, dry_run=False, task_id=None):
     """分档结果报告（给人看的那一版）。
 
-    **两档的来源都是接口/既有扫描，脚本不自行判断「文档内容是否被改过」**：
+    **三档的来源都是接口/既有扫描，脚本不自行判断「文档内容是否被改过、是否为空」**：
       · 「新增 / 已存在·复用」= `build_plan` 的归一匹配结果（候选 vs 目端既有 href），
         与接口 `dry_run_stats.add_num / special_num` 同源同义 —— 报告里把接口计数
         一并打出来做交叉校验，两边不等就说明匹配索引和接口口径不一致（要查，不能糊过去）。
-      · 「失败」= 接口 `failed_items[]` 的 failed_code / failed_reason。
-      · 「已导入·内容提示」= `failed_items[]` 里命中 `BENIGN_FAILED_CODES` 的项
-        （文件已导入成功，仅内容处理为空/受限，如 video_content_empty）—— 不计失败（2026-09-22 用户裁决）。
+      · 「失败」= 接口 `failed_items[]` 的 failed_code / failed_reason，逐条原样打印。
+        🔴 接口判失败就是失败，不做任何「其实已导入」的解释（2026-09-22 用户裁决）。
 
     ⚠️ 接口**没有**「内容有更新」这一维度：`import_describe_task` 只回
     `status / percentage / total_num / current_num`（dry-run 另回 `dry_run_stats`），
@@ -969,7 +946,7 @@ def render_report(plan, data, cfg, dry_run=False, task_id=None):
     """
     new = [p for p in plan if p["result"].startswith("NEW")]
     matched = [p for p in plan if not p["result"].startswith("NEW")]
-    real_fails, benign_fails = split_failed_items(data.get("failed_items") or [])
+    fails = data.get("failed_items") or []
     drs = data.get("dry_run_stats") if isinstance(data.get("dry_run_stats"), dict) else {}
 
     base = _base_url(cfg)
@@ -999,13 +976,8 @@ def render_report(plan, data, cfg, dry_run=False, task_id=None):
     for i, p in enumerate(matched, 1):
         line(p, i)
 
-    print("  ⚠️ 已导入·内容提示 : %d 条%s（文件已导入成功，不计失败）" % (len(benign_fails), "" if benign_fails else "（无）"))
-    for f in benign_fails:
-        print("    - %s" % (f.get("name") or f.get("id")))
-        print("       failed_code=%s  reason=%s" % (f.get("failed_code"), f.get("failed_reason")))
-
-    print("  ❌ 失败 : %d 条%s" % (len(real_fails), "" if real_fails else "（无）"))
-    for f in real_fails:
+    print("  ❌ 失败 : %d 条%s" % (len(fails), "" if fails else "（无）"))
+    for f in fails:
         print("    - %s" % (f.get("name") or f.get("id")))
         print("       failed_code=%s  reason=%s" % (f.get("failed_code"), f.get("failed_reason")))
 
@@ -1222,15 +1194,10 @@ def do_create(ctx, cfg, wait=True):
     render_failures(data)
     render_report(plan, data, cfg, dry_run=False, task_id=read_cache(ctx) or task_id)
     if (data.get("status") or "").strip() == "failed":
-        real_fails, benign_fails = split_failed_items(data.get("failed_items") or [])
-        if not real_fails:
-            # 任务状态 failed，但未成功项全是内容提示类（如 video_content_empty）→ 文件均已导入成功，按成功处理
-            print("任务状态为 failed，但全部未成功项均为内容提示类（%s）——文件均已导入成功，按成功处理，退出码 0。"
-                  % ", ".join(sorted({(f.get("failed_code") or f.get("failed_reason") or "?") for f in benign_fails})))
-            return 0
         total = data.get("total_num")
-        print("导入任务失败：%s（总计 %s 条，其中 %d 条未成功 —— 逐条原因见上「未成功项」）"
-              % (data.get("err_message") or "(无)", total, len(real_fails)), file=sys.stderr)
+        n_fail = len(data.get("failed_items") or [])
+        print("导入任务失败：%s（总计 %s 条，其中 %s 条未成功 —— 逐条原因见上「未成功项」）"
+              % (data.get("err_message") or "(无)", total, n_fail), file=sys.stderr)
         print_auth_hint()
         return 1
     return 0
@@ -1259,11 +1226,7 @@ def do_status(ctx, cfg):
         print("  ⏳ 仍有 %d 条条目在服务端处理中：不要用当前部分结果汇总输出导入任务；" % len(pending), file=sys.stderr)
         print("     稍后再次运行本命令，直到不再出现「处理中」条目，再汇总输出。", file=sys.stderr)
     if status == "failed":
-        real_fails, _ = split_failed_items(data.get("failed_items") or [])
-        if not real_fails:
-            print("任务状态为 failed，但未成功项均为内容提示类（文件已导入成功），不计失败。", file=sys.stderr)
-            return 0
-        print("导入任务失败：%s" % (data.get("err_message") or "(无)"), file=sys.stderr)
+        print("导入任务失败：%s（逐条原因见上「未成功项」）" % (data.get("err_message") or "(无)"), file=sys.stderr)
         print_auth_hint()
         return 1
     return 0

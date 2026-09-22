@@ -228,12 +228,10 @@ code=51 validate proto message: validation error:
 → **`failed` ≠ 全军覆没**。判定口径是 `failed_items[]` 条数 vs `total_num`，
 文案要写清「总计 N 条，其中 M 条未成功」，否则用户会误以为全部要重做。
 退出码仍按方案给 `exit 1`（有失败就是有失败，不能被「大部分成功」吞掉）。
-**唯一例外（2026-09-22 用户裁决）**：`failed_code`（或 reason）命中 `BENIGN_FAILED_CODES` 的项
-（如 `video_content_empty`）**不是导入失败** —— 文件已成功导入乐享，只是服务端内容处理
-（转写/提取）为空，属内容处理层的事，导入 skill 不该把它当失败汇报。这类项单列「⚠️ 已导入·内容提示」档、
-按成功口径统计；若任务 `failed` 的未成功项**全部**是内容提示类 → `exit 0`。
-注意 mp3 实测中该项出现在 `entries[].status`（item 级 `status=failed` + `failed_reason=video_content_empty`、
-无 failed_code），分档匹配对 code / reason **两者都查**。
+🔴 **无任何例外**（2026-09-22 用户裁决）：出现在 `failed_items[]` 里就是失败，照实报
+`failed_code` / `failed_reason` 原文——**不判断**内容是否为空、不解释「其实已导入」、
+不给任何失败码开白名单（历史版本曾按 `video_content_empty` 分档「已导入·内容提示」并 exit 0，
+当日已被裁决整体删除，勿复活——详见 `pitfalls.md` §2.11）。
 
 **④（附带）`dry_run_stats` 的计数为 0 时，服务端不回该字段。**
 
