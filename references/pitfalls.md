@@ -203,13 +203,21 @@
 ### 2.11 失败码分档的两次裁决变迁（存档，现行 = 接口口径，两侧都禁止）
 
 **事件**：测试任务（WorkBuddy 读取企微文档并完成任务）实测微盘 mp3「标准录音 1」服务端报
-`video_content_empty`（`failed_items[]` 侧以该 code 出现；`entries[].status` 里 item 级
-`status=failed` + `failed_reason=video_content_empty`、无 failed_code），但乐享端能看到该文件。
+`video_content_empty`（`entries[].status` 里 item 级 `status=failed` + `failed_reason=video_content_empty`），
+但乐享端能看到该文件。
+
+**2026-09-22 定位修正（用户定位，最终版）**：该条目 `entries[].status=failed+video_content_empty`，
+但**不在 `failed_items[]` 里**且实际导入成功。此前误报的根源 = 把 `entries[].status` 的
+failed/failed_reason 当成了失败输出口径。**修正后口径：失败文档与原因的唯一来源 = `failed_items[]`，
+`entries[].status` 只用于进度展示与排空等待，不参与成败判定**（`render_entries` 不再打印
+条目级 failed_reason；`render_report` 的失败档只取 `failed_items[]`，且成功档剔除
+`failed_items[]` 条目）。
 
 | 时间 | 裁决 | 落地 |
 |---|---|---|
 | 2026-09-22 上午 | 「音频内容是否为空属服务端内容处理层，不是导入 skill 该管的」→ 按成功处理 | 加了 `BENIGN_FAILED_CODES` 常量、四档报告（「⚠️ 已导入·内容提示」）、全部为该类时 `exit 0` |
-| **2026-09-22 晚（现行）** | **「接口返回成功就是成功、返回失败就是失败，失败给出原因。不要判断文档/文件是否为空」** | 🔴 `BENIGN_FAILED_CODES` / `_is_benign` / `split_failed_items` **整体删除**；报告回三档；`failed` 一律 `exit 1`；原因照 `failed_items[]` 原文报 |
+| 2026-09-22 晚 | 「接口返回成功就是成功、返回失败就是失败，失败给出原因。不要判断文档/文件是否为空」 | 🔴 `BENIGN_FAILED_CODES` / `_is_benign` / `split_failed_items` **整体删除**；报告回三档；`failed` 一律 `exit 1`；原因照 `failed_items[]` 原文报 |
+| **2026-09-22 定位修正（现行）** | **失败文档与原因从 `failed_items[]` 取，不从 `entries[]` 取** | 🔴 `render_entries` 只作进度展示、不再打印条目级 `failed_reason`；`render_report` 失败档唯一来源 `failed_items[]`，成功档剔除其中条目 |
 
 **为什么上午的裁决也错了**（同一失败模式的再次重演，与 §2.4 同构）：
 「文件实际已导入、只是内容为空」是**我们对回包的二次解释**，不是接口事实。一旦 skill 开始

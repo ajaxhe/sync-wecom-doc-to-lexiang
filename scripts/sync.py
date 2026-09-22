@@ -128,7 +128,11 @@ def pending_entries(data):
 
 
 # 🔴 成败口径（2026-09-22 用户裁决，最高纲领）：**接口说什么就是什么**。
-# 接口返回导入成功 → 就是成功；接口返回失败（failed_items[] / failed_code+failed_reason）→ 就是失败，照实报原因。
+# 任务成败 = import_describe_task 的任务级 `status`；**失败文档与原因的唯一来源 = `failed_items[]`**
+# （2026-09-22 定位修正：`entries[].status` 的 failed / failed_reason **不作为失败口径** ——
+#  实测「标准录音 1.mp3」entries[].status=failed+video_content_empty，却不在 failed_items[] 里、
+#  实际导入成功；把 entries[].status 当失败口径就会误报）。
+# `entries[]` 只用于两件事：进度展示（条目 status label）与排空等待（条目 processing 判断）。
 # **不判断**文档/文件内容是否为空、不解释「这个失败其实文件已经导入」——那是替服务端做内容判断，
 # 一律禁止（历史教训：video_content_empty 曾被分档为「已导入·内容提示」，2026-09-22 晚已裁决删除）。
 
@@ -997,17 +1001,21 @@ def render_plan(plan):
 
 
 def render_entries(data):
+    """打印条目明细 —— **仅进度参考，不是成败口径**。
+    🔴 entries[].status 的 failed / failed_reason **不作为失败输出**（2026-09-22 用户裁决）：
+    失败文档与原因的**唯一来源**是 `failed_items[]`（见 render_failures）。
+    实测依据：标准录音 1.mp3 的 entries[].status=failed+video_content_empty，
+    但它不在 failed_items[] 里、实际导入成功 —— 条目明细若打印 failed_reason 就会被当成失败误报。
+    所以这里只打印进度状态 label（finished/failed/processing…原样），**绝不**展开 failed_reason。"""
     entries = data.get("entries") or []
     if not entries:
         return
-    print("  条目明细:")
+    print("  条目明细（仅进度参考；成败与失败原因一律以 failed_items 为准）:")
     for e in entries:
         href = (((e.get("source") or {}).get("href")) or {})
         st = e.get("status") or {}
         label = st.get("status", "?")
-        extra = ("  reason=%s" % st.get("failed_reason")) if st.get("failed_reason") else ""
-        print("    - [%s] %s  href.id=%s%s" % (
-            label, e.get("name", ""), href.get("id", "(none)"), extra))
+        print("    - [%s] %s  href.id=%s" % (label, e.get("name", ""), href.get("id", "(none)")))
 
 
 def render_failures(data):
@@ -1060,8 +1068,12 @@ def render_report(plan, data, cfg, dry_run=False, task_id=None):
       · 「新增 / 已存在·复用」= `build_plan` 的归一匹配结果（候选 vs 目端既有 href），
         与接口 `dry_run_stats.add_num / special_num` 同源同义 —— 报告里把接口计数
         一并打出来做交叉校验，两边不等就说明匹配索引和接口口径不一致（要查，不能糊过去）。
-      · 「失败」= 接口 `failed_items[]` 的 failed_code / failed_reason，逐条原样打印。
-        🔴 接口判失败就是失败，不做任何「其实已导入」的解释（2026-09-22 用户裁决）。
+        同时**剔除出现在 `failed_items[]` 里的条目**（按 failed_items[].id ↔ plan[].submit 对齐），
+        避免同一文档既挂✅又挂❌。
+      · 「失败」= **唯一来源** 接口 `failed_items[]` 的 failed_code / failed_reason，逐条原样打印。
+        🔴 接口判失败就是失败，不做任何「其实已导入」的解释（2026-09-22 用户裁决）；
+        `entries[].status` 的 failed/failed_reason **不参与**失败档（见 render_entries docstring：
+        实测标准录音 1.mp3 条目级 failed+video_content_empty 但不在 failed_items[]、实际导入成功）。
 
     ⚠️ 接口**没有**「内容有更新」这一维度：`import_describe_task` 只回
     `status / percentage / total_num / current_num`（dry-run 另回 `dry_run_stats`），
@@ -1069,9 +1081,10 @@ def render_report(plan, data, cfg, dry_run=False, task_id=None):
     「有更新」档 —— 要那一档，得先让导入接口在回包里给出条目级操作类型（见
     references/import-api.md「报告能取到什么」）。
     """
-    new = [p for p in plan if p["result"].startswith("NEW")]
-    matched = [p for p in plan if not p["result"].startswith("NEW")]
     fails = data.get("failed_items") or []
+    fail_ids = {str(f.get("id") or "") for f in fails}
+    new = [p for p in plan if p["result"].startswith("NEW") and p["submit"] not in fail_ids]
+    matched = [p for p in plan if not p["result"].startswith("NEW") and p["submit"] not in fail_ids]
     drs = data.get("dry_run_stats") if isinstance(data.get("dry_run_stats"), dict) else {}
 
     base = _base_url(cfg)
@@ -1109,9 +1122,13 @@ def render_report(plan, data, cfg, dry_run=False, task_id=None):
     if drs:
         add_num, special_num = drs.get("add_num") or 0, drs.get("special_num") or 0
         print("  接口计数   : add_num=%s  special_num=%s" % (add_num, special_num))
-        if (add_num, special_num) != (len(new), len(matched)):
+        # 交叉校验用**剔除 failed_items 之前**的匹配数量：add_num/special_num 是服务端
+        # 的匹配计数（与失败无关），拿剔除后的数比会把失败条目错算成「口径不符」。
+        n_new_all = sum(1 for p in plan if p["result"].startswith("NEW"))
+        n_matched_all = len(plan) - n_new_all
+        if (add_num, special_num) != (n_new_all, n_matched_all):
             print("  ⚠️ 口径不符 : 本地匹配（新增 %d / 已存在 %d）与接口计数不一致，"
-                  "请加 --debug 核对 sync.log" % (len(new), len(matched)))
+                  "请加 --debug 核对 sync.log" % (n_new_all, n_matched_all))
 
 
 # ==========================================================================

@@ -102,11 +102,15 @@ python3 scripts/sync.py resolve '<乐享目录链接>'            # 只读：解
 
 | 档 | 来源 |
 |---|---|
-| ✅ 新增（`add_num`） | 候选归一后未命中目端既有 `source.href.id` |
-| ♻️ 已存在·复用（`special_num`） | 命中既有条目（按既有原始字符串提交 → 幂等复用），报告里带**目端条目名 + 目端链接** |
-| ❌ 失败 | 接口 `failed_items[]` 的 `failed_code` / `failed_reason`，逐条**原文**打印 |
+| ✅ 新增（`add_num`） | 候选归一后未命中目端既有 `source.href.id`；**已剔除**出现在 `failed_items[]` 里的条目（避免同一文档既挂✅又挂❌） |
+| ♻️ 已存在·复用（`special_num`） | 命中既有条目（按既有原始字符串提交 → 幂等复用），报告里带**目端条目名 + 目端链接**；同样剔除 `failed_items[]` 条目 |
+| ❌ 失败 | **唯一来源**：接口 `failed_items[]` 的 `failed_code` / `failed_reason`，逐条**原文**打印 |
 
 🔴 **成败口径（原则 3）**：接口返回导入成功就是成功；接口返回失败就是失败、照实报原因原文。
+🔴 **失败文档与原因的唯一来源 = `failed_items[]`**（2026-09-22 定位修正）：`entries[].status`
+里的 failed / failed_reason **不作为失败口径** —— 实测「标准录音 1.mp3」条目级
+`failed+video_content_empty` 但**不在** `failed_items[]`、实际导入成功；条目明细仅作进度参考
+（脚本输出里已标注）。汇总失败时**只看** `failed_items[]`，不要把条目明细里的 failed 状态当失败数。
 **不判断**文档/文件内容是否为空、不解释「这个失败其实文件已经导入」——任何「失败码白名单 /
 内容提示分档」都属违规（历史版本曾加过 `BENIGN_FAILED_CODES`，2026-09-22 裁决删除，勿复活）。
 
