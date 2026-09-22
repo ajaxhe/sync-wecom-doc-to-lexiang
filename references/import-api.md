@@ -164,7 +164,7 @@ code=51 validate proto message: validation error:
 
 | 字段 | 含义 |
 |---|---|
-| `status` | `page_processing`（进行中）/ `succeed` / `failed` |
+| `status` | ⭐ **任务结束判定唯一依据**（不看其他字段）。官方枚举 5 值：`page_processing`（页面导入进行中 x/n）/ `processing`（正在导入，初始化/解压 zip）= 进行中；`succeed`（成功）/ `failed`（失败）/ `canceled`（已取消）= 终态 |
 | `total_num` / `current_num` | 总条数 / 已完成数（进度） |
 | `err_message` | **只有一句泛化文案**（「导入失败，请查看失败文档」），排障价值低 |
 | `failed_items[]` | ⭐ **真正的失败原因在这里**：`failed_code` + `failed_reason`（含原始报错与 `callid`）。不打印它 = 用户排不了障 |
@@ -277,28 +277,26 @@ code=51 validate proto message: validation error:
 
 ```
 create → code:0 + task_id        （只证明任务已创建，不代表参数合法）
-      → status = page_processing （实测约 12s）
-      → status = succeed / failed
-        succeed: current_num/total_num = N/N，failed_items 为空
-        failed : err_message 泛化文案 + entries[]（成功项）+ failed_items[].failed_reason（失败项明细）
-                 ↑ 只要有 1 条失败就整体 failed，「部分成功」不会有独立状态
+      → status = page_processing / processing   （进行中：页面导入 x/n、初始化/解压 zip）
+      → status = succeed / failed / canceled    （终态，到终态立即汇总输出）
+        succeed : current_num/total_num = N/N，failed_items 为空
+        failed  : err_message 泛化文案 + entries[]（成功项）+ failed_items[].failed_reason（失败项明细）
+                  ↑ 只要有 1 条失败就整体 failed，「部分成功」不会有独立状态
+        canceled: 任务已取消，exit 1
 ```
 
 **轮询建议**：3s / 次，上限 60 次（=180s），超时即报 `task_id` 并 `exit 1`，**不要无限轮询**。
 
-### ⚠️ 任务级终态 ≠ 条目级全部完成
+### 任务结束判定：只看 `data.status`
 
-任务已到终态（`failed`）时，大文件的条目仍可能停在
-`entries[].status=processing`，服务端后台继续转存，稍后才 finished。
-→ 若到终态立刻汇总输出，会把「还在处理」的条目误报成败。
+**规则**：任务是否结束**唯一依据** = 顶层 `data.status`（枚举见上），**不参考 `entries[]` 等任何其他字段**。
+到终态（`succeed` / `failed` / `canceled`）立即汇总输出，不做「等条目排空」之类的二次等待。
 
 脚本行为（`_submit_and_poll`）：
 
-1. 到任务终态后检查 `entries[]` 里是否仍有 `processing` 条目 → 有则**继续轮询等排空**（同一轮询预算内），
-   首次发现时打印仍在处理的条目清单；
-2. 排空（无任何处理中条目）→ 才输出汇总报告；
-3. 预算用尽仍有处理中 → `exit 1`，并打印**给 Agent 的显式指令**：不要立即汇总导入结果，
-   等待后重跑 `status`，直到没有处理中条目再汇总输出（`status` 命令遇处理中条目同样打印该指令）。
+1. 按 3s 间隔轮询 describe，`status` 命中终态集合 → 立即输出汇总报告；
+2. 仍在 `page_processing` / `processing` → 继续轮询；
+3. 轮询预算用尽仍未到终态 → `exit 1`，打印 `task_id` 并提示稍后用 `status` 查询，**不要无限轮询**。
 
 ---
 

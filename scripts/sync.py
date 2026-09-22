@@ -70,8 +70,7 @@ MCP 调用路径（走哪条**由当前可见 tools 决定**，不遵守会让�
 
 退出码：0 成功（含「已有进行中任务 → 静默退出」，供定时任务复用）；
         1 运行期失败（鉴权失效 / 任务 failed（**含接口判「非法的 'file_id'」等形态问题**）/
-                     任务到终态但条目排空超时（仍有条目处理中 → 输出「等全部处理完再汇总」的 Agent 指令）/
-                     凭证缺失 / 目录扫描失败 / 网络异常 / 轮询超时）；
+                     任务 canceled（已取消）/ 凭证缺失 / 目录扫描失败 / 网络异常 / 轮询超时）；
         2 用法错误（未知命令、缺参数）。
 
 🔴 四条不变式（改代码前务必先读 references/pitfalls.md）：
@@ -110,28 +109,22 @@ SKILL_ROOT = os.path.dirname(HERE)                   # = <skill> 根目录
 PROFILES_DIR = os.path.join(SKILL_ROOT, "profiles")  # 状态目录固定留在 skill 根
 DEFAULT_PROFILE = "default"
 
-# 任务状态
-IN_PROGRESS_STATES = {"page_processing", "processing", "pending", "running"}
-FINAL_STATES = {"succeed", "failed"}
-
-# 条目级状态（entries[].status.status）：finished / failed 为条目终态，其余按「处理中」对待。
-# ⚠️ 任务级终态 ≠ 条目级全部完成：服务端会把仍在后台转存的大文件条目
-# 留在 processing，任务却已先到终态 → 必须**等条目全部处理完再汇总输出**。
-def _is_item_pending(entry):
-    st = (entry.get("status") or {}).get("status") or ""
-    return st in IN_PROGRESS_STATES
-
-
-def pending_entries(data):
-    """从 describe 回包里挑出仍在处理中的条目。entries 缺失/为空时返回 []（无从判断即不阻塞）。"""
-    return [e for e in (data.get("entries") or []) if _is_item_pending(e)]
-
+# 🔴 任务结束判定的**唯一依据 = describe 回包顶层 `data.status`**，不参考任何其他字段。
+# 官方枚举（就这 5 个值）：
+#   page_processing — 页面导入进行中 (x/n)        → 进行中
+#   processing      — 正在导入（初始化/解压 zip）  → 进行中
+#   succeed         — 成功                        → 终态
+#   failed          — 失败                        → 终态
+#   canceled        — 已取消                      → 终态
+IN_PROGRESS_STATES = {"page_processing", "processing"}
+FINAL_STATES = {"succeed", "failed", "canceled"}
 
 # 🔴 成败口径（最高纲领）：**接口说什么就是什么**。
-# 任务成败 = import_describe_task 的任务级 `status`；**失败文档与原因的唯一来源 = `failed_items[]`**；
+# 任务是否结束 / 成败 = 任务级 `data.status`（**只看这一个字段**，见上枚举）；
+# **失败文档与原因的唯一来源 = `failed_items[]`**；
 # `entries[].status` 的 failed / failed_reason **不作为失败口径**（条目级状态即便标 failed，
 # 也可能实际已导入成功——把 entries[].status 当失败口径就会误报）。
-# `entries[]` 只用于两件事：进度展示（条目 status label）与排空等待（条目 processing 判断）。
+# `entries[]` 只用于一件事：进度展示（条目 status label），**不参与任何判定**。
 # **不判断**文档/文件内容是否为空、不解释「这个失败其实文件已经导入」——那是替服务端做内容判断，
 # 一律禁止（规则详见 pitfalls.md「二、成败与失败口径」）。
 
@@ -139,10 +132,10 @@ def pending_entries(data):
 # 实测证明「光在文档里写规则」拦不住误判 —— Agent 拿到含条目级错误说明的回包后，
 # 仍会把 entries[] 里的 failed_reason（如 video_content_empty）当成失败证据去汇报。
 # 所以在 **_rpc_post 统一出口**把 entries[] 条目内部的错误说明字段物理剔除：
-#   · 应用层（render_* / pending_entries）与 sync.log 拿到的都是**已过滤**的回包，
+#   · 应用层（render_*）与 sync.log 拿到的都是**已过滤**的回包，
 #     Agent 从任何渠道都**看不到**条目级错误说明 → 只剩 failed_items[] 一条路可走；
 #   · **failed_items[] 原样保留**（那是失败口径的唯一来源，一个字都不动）；
-#   · entries[].status 的终态 label（finished/failed）保留 —— 排空等待与进度展示要用它，
+#   · entries[].status 的 label（finished/failed 等）保留 —— 仅进度展示要用它，
 #     但条目明细不再附带任何「为什么失败」的描述，无法再被当成失败证据引用。
 _ENTRY_ERROR_KEYS = frozenset(("failed_reason", "failed_code", "err_message", "error_detail"))
 
@@ -1285,7 +1278,6 @@ def _submit_and_poll(ctx, cfg, files, dry_run, wait):
         return {"__task_id": task_id}, 0
 
     data = None
-    drain_announced = False
     for n in range(POLL_MAX):
         try:
             data = query_status(ctx, cfg, task_id)
@@ -1297,33 +1289,15 @@ def _submit_and_poll(ctx, cfg, files, dry_run, wait):
             print("  状态       : %s   进度 %s/%s" % (st, data.get("current_num"), data.get("total_num")))
             render_stats(data)
         if st in FINAL_STATES:
-            # 任务级终态 ≠ 条目级全部完成：服务端会把仍在后台转存的大文件条目留在
-            # entries[].status=processing，任务却已先到终态。
-            # 等所有条目处理完再汇总输出，不要拿部分结果交差。
-            pending = pending_entries(data)
-            if not pending:
-                # 带上本次任务号：dry_run 不写缓存，报告里若只靠 read_cache 会显示上一次的任务 id
-                data["__task_id"] = task_id
-                return data, 0
-            if not drain_announced:
-                print("  ⏳ 任务已到终态（%s），但仍有 %d 条条目在服务端处理中，继续等待：" % (st, len(pending)))
-                for e in pending:
-                    href = (((e.get("source") or {}).get("href")) or {})
-                    print("      - %s  (%s)" % (e.get("name") or href.get("id", "?"), href.get("id", "")))
-                drain_announced = True
+            # 🔴 任务结束**只看 data.status**（唯一依据，不参考 entries 等其他字段）：
+            # 到终态立即汇总输出，不做任何「等条目排空」的二次等待。
+            data["__task_id"] = task_id
+            return data, 0
         time.sleep(POLL_INTERVAL)
 
-    # 轮询预算用尽
+    # 轮询预算用尽，仍未到终态（status 停留在 page_processing / processing）
     data = data or {}
     data["__task_id"] = task_id
-    pending = pending_entries(data) if (data.get("status") or "").strip() in FINAL_STATES else []
-    if pending:
-        print("  ⏳ 提示     : 任务已到终态，但 %d 条条目仍在服务端后台处理（大文件转存可能超过轮询预算 %ds）：" % (len(pending), POLL_MAX * POLL_INTERVAL), file=sys.stderr)
-        for e in pending:
-            print("      - %s" % (e.get("name") or "?"), file=sys.stderr)
-        print("  ⏳ 给 Agent 的指令：**不要立即汇总导入结果**。等待后重跑 `python3 scripts/sync.py status` "
-              "（每次 status 都会重打条目明细），直到没有任何条目处于处理中，再汇总输出导入任务。", file=sys.stderr)
-        return data, 1
     print("  超时       : 轮询 %d 次 × %ds 仍未到终态（task_id=%s）。请稍后用 status 查询。"
           % (POLL_MAX, POLL_INTERVAL, task_id), file=sys.stderr)
     return data, 1
@@ -1397,7 +1371,12 @@ def do_create(ctx, cfg, wait=True):
     render_entries(data)
     render_failures(data)
     render_report(plan, data, cfg, dry_run=False, task_id=read_cache(ctx) or task_id)
-    if (data.get("status") or "").strip() == "failed":
+    st = (data.get("status") or "").strip()
+    if st == "canceled":
+        print("导入任务已取消（status=canceled，task_id=%s）。如需导入请重新运行 create。" % (data.get("__task_id") or task_id),
+              file=sys.stderr)
+        return 1
+    if st == "failed":
         total = data.get("total_num")
         n_fail = len(data.get("failed_items") or [])
         print("导入任务失败：%s（总计 %s 条，其中 %s 条未成功 —— 逐条原因见上「未成功项」）"
@@ -1424,11 +1403,9 @@ def do_status(ctx, cfg):
     render_stats(data)
     render_entries(data)
     render_failures(data)
-    # 仍有条目在处理 → 显式提示 Agent 等全部处理完再汇总输出
-    pending = pending_entries(data)
-    if pending:
-        print("  ⏳ 仍有 %d 条条目在服务端处理中：不要用当前部分结果汇总输出导入任务；" % len(pending), file=sys.stderr)
-        print("     稍后再次运行本命令，直到不再出现「处理中」条目，再汇总输出。", file=sys.stderr)
+    if status == "canceled":
+        print("导入任务已取消（status=canceled）。如需导入请重新运行 create。", file=sys.stderr)
+        return 1
     if status == "failed":
         print("导入任务失败：%s（逐条原因见上「未成功项」）" % (data.get("err_message") or "(无)"), file=sys.stderr)
         print_auth_hint()
