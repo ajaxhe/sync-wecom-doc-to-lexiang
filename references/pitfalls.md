@@ -52,6 +52,10 @@
 1. **失败文档与原因的唯一来源 = `failed_items[]`**（`failed_code` + `failed_reason`，逐条**原文**）。
    `entries[].status` **只用于进度展示与排空等待，不参与成败判定**——条目级 failed / failed_reason
    不进报告、不当失败数。
+   **工程兜底**：脚本在 `_rpc_post` 回包出口用 `strip_entry_errors` 把 `entries[]` 条目内部的
+   错误说明字段（`failed_reason` / `failed_code` / `err_message` / `error_detail`）**统一剔除**，
+   `failed_items[]` 原样保留；stdout 与 `--debug` 日志拿到的都是**同一份已过滤回包**。因此
+   Agent 从任何渠道都看不到条目级错误说明——失败原因只能来自 `failed_items[]`，没有第二条路。
 2. **接口判成功即成功、判失败即失败**。不判断文档/文件内容是否为空、不解释「这个失败其实已导入」、
    **不给任何失败码开白名单**（任何「哪些失败其实算成功」的名单都会过期、漏判，且让 `exit code`
    与接口结论不一致）。

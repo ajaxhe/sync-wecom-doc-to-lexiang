@@ -135,6 +135,66 @@ def pending_entries(data):
 # **不判断**文档/文件内容是否为空、不解释「这个失败其实文件已经导入」——那是替服务端做内容判断，
 # 一律禁止（规则详见 pitfalls.md「二、成败与失败口径」）。
 
+# 🔴 回包出口过滤（成败口径的**工程兜底**，与上面的口径规则配套）：
+# 实测证明「光在文档里写规则」拦不住误判 —— Agent 拿到含条目级错误说明的回包后，
+# 仍会把 entries[] 里的 failed_reason（如 video_content_empty）当成失败证据去汇报。
+# 所以在 **_rpc_post 统一出口**把 entries[] 条目内部的错误说明字段物理剔除：
+#   · 应用层（render_* / pending_entries）与 sync.log 拿到的都是**已过滤**的回包，
+#     Agent 从任何渠道都**看不到**条目级错误说明 → 只剩 failed_items[] 一条路可走；
+#   · **failed_items[] 原样保留**（那是失败口径的唯一来源，一个字都不动）；
+#   · entries[].status 的终态 label（finished/failed）保留 —— 排空等待与进度展示要用它，
+#     但条目明细不再附带任何「为什么失败」的描述，无法再被当成失败证据引用。
+_ENTRY_ERROR_KEYS = frozenset(("failed_reason", "failed_code", "err_message", "error_detail"))
+
+
+def strip_entry_errors(node, in_entry=False):
+    """递归过滤回包：**仅剔除 entries[] 条目内部**的错误说明字段，其余原样保留。
+
+    走向规则（务必维持，改错一处就会误伤 failed_items[]）：
+      · 进入 key == "entries" 的 list → 其元素及内部所有层级置 in_entry=True，命中
+        _ENTRY_ERROR_KEYS 的字段被剔除；
+      · key == "failed_items" → 整个值**原样返回**（失败口径唯一来源，绝不清洗）；
+      · 其余结构递归透传，in_entry 状态随层级保持。
+    """
+    if isinstance(node, dict):
+        out = {}
+        for k, v in node.items():
+            if in_entry and k in _ENTRY_ERROR_KEYS:
+                continue
+            if k == "entries" and isinstance(v, list):
+                out[k] = [strip_entry_errors(e, True) for e in v]
+            elif k == "failed_items":
+                out[k] = v
+            else:
+                out[k] = strip_entry_errors(v, in_entry)
+        return out
+    if isinstance(node, list):
+        return [strip_entry_errors(x, in_entry) for x in node]
+    return node
+
+
+def sanitize_rpc_envelope(outer):
+    """对整个 JSON-RPC 外层做回包出口过滤，覆盖 MCP 回包的**两种装载形态**：
+      1. 结构化字段直接挂在 outer 上（如 structuredContent）→ strip_entry_errors 递归可达；
+      2. 业务数据装在 result.content[*].text 里，是一段 **JSON 字符串**（tools/call 标准形态）
+         → 递归走不进字符串，必须先 json.loads 解开、过滤、再序列化塞回去。
+    返回过滤后的 outer（原地修改 content[*].text）。"""
+    outer = strip_entry_errors(outer)
+    result = outer.get("result") if isinstance(outer, dict) else None
+    if isinstance(result, dict):
+        content = result.get("content")
+        if isinstance(content, list):
+            for item in content:
+                if not (isinstance(item, dict) and item.get("type") == "text"
+                        and isinstance(item.get("text"), str)):
+                    continue
+                try:
+                    inner = json.loads(item["text"])
+                except ValueError:
+                    continue  # 纯文本回包（如路径拒绝提示），无结构可过滤，原样保留
+                item["text"] = json.dumps(strip_entry_errors(inner), ensure_ascii=False)
+    return outer
+
 # 轮询上限：60 次 × 3s = 180s。超时即 exit 1，绝不无限轮询（主理人硬规格 #3）
 POLL_INTERVAL = 3
 POLL_MAX = 60
@@ -697,12 +757,20 @@ def _rpc_post(ctx, cfg, payload, path):
         debug_log(ctx, "[%s] <<< 请求异常: %s" % (_now(), e))
         raise RuntimeError("调用乐享 MCP 失败：%s" % e)
 
-    debug_log(ctx, "[%s] <<< RESPONSE (原始回包)" % _now(), raw)
-
     try:
         outer = json.loads(raw)
     except ValueError:
+        # JSON 都解析不了时没有「过滤」可言，原始报文落日志供排障（此时不含可识别的 entries 结构）。
+        debug_log(ctx, "[%s] <<< RESPONSE (原始回包，JSON 解析失败)" % _now(), raw)
         raise RuntimeError("调用乐享 MCP 失败：回包不是合法 JSON（可加 --debug 查看 sync.log）")
+
+    # 🔴 回包出口过滤（见 strip_entry_errors 处的口径说明）：
+    # entries[] 条目级错误说明在出口统一剔除（含 result.content[*].text 里 JSON 字符串那层），
+    # **日志与应用层看到的是同一份已过滤回包**——Agent 读 stdout 还是读 sync.log 都拿不到
+    # 条目级 failed_reason，误报通道物理关闭。failed_items[] 原样保留，失败原因照常从那里取。
+    outer = sanitize_rpc_envelope(outer)
+    debug_log(ctx, "[%s] <<< RESPONSE (已过滤 entries[] 条目级错误说明；failed_items 原样保留)"
+              % _now(), json.dumps(outer, ensure_ascii=False))
 
     if "error" in outer:
         raise RuntimeError("调用乐享 MCP 失败：%s" % json.dumps(outer["error"], ensure_ascii=False)[:300])
@@ -994,11 +1062,10 @@ def render_plan(plan):
 
 def render_entries(data):
     """打印条目明细 —— **仅进度参考，不是成败口径**。
-    🔴 entries[].status 的 failed / failed_reason **不作为失败输出**：
-    失败文档与原因的**唯一来源**是 `failed_items[]`（见 render_failures）。
-    条目级状态即便标 failed 也可能实际已导入成功（这样的条目不会出现在 failed_items[] 里），
-    条目明细若打印 failed_reason 就会被当成失败误报。
-    所以这里只打印进度状态 label（finished/failed/processing…原样），**绝不**展开 failed_reason。"""
+    🔴 失败文档与原因的**唯一来源**是 `failed_items[]`（见 render_failures）；
+    entries[].status 的 failed 不作为失败口径（条目级标 failed 也可能实际已导入成功）。
+    🛡 双保险：走到这里的回包已在 _rpc_post 出口被 strip_entry_errors 过滤，
+    条目级错误说明字段（failed_reason 等）**物理不存在**，想误报也无料可用。"""
     entries = data.get("entries") or []
     if not entries:
         return

@@ -108,8 +108,9 @@ python3 scripts/sync.py resolve '<乐享目录链接>'            # 只读：解
 
 🔴 **成败口径（原则 3）**：接口返回导入成功就是成功；接口返回失败就是失败、照实报原因原文。
 🔴 **失败文档与原因的唯一来源 = `failed_items[]`**：`entries[].status` 里的 failed / failed_reason
-**不作为失败口径**（条目明细仅作进度参考，脚本输出里已标注）。汇总失败时**只看** `failed_items[]`，
-不要把条目明细里的 failed 状态当失败数。
+**不作为失败口径**。🛡 工程兜底：脚本已在回包出口把 `entries[]` 条目级错误说明**统一过滤**
+（stdout 与 sync.log 同为已过滤版本）——Agent 侧**不可能**看到条目级 failed_reason，
+失败原因只能来自 `failed_items[]`。汇总失败时**只看** `failed_items[]`。
 **不判断**文档/文件内容是否为空、不解释「这个失败其实文件已经导入」——任何「失败码白名单 /
 内容提示分档」都属违规。
 
@@ -151,7 +152,7 @@ python3 scripts/sync.py resolve '<乐享目录链接>'            # 只读：解
 「不要立即汇总导入结果，等待后重跑 `status`，直到没有处理中条目再汇总输出」。
 `status` 命令遇到处理中条目同样打印该指令。
 
-**通用开关**：`--profile NAME`（缺省 `default`）、`--debug`（把「时间戳 + 等价 curl（token 打码）+ 请求体 + 原始回包」写入该 profile 的 `sync.log`，不带则不产日志）、`--no-wait`（仅建任务不轮询）。
+**通用开关**：`--profile NAME`（缺省 `default`）、`--debug`（把「时间戳 + 等价 curl（token 打码）+ 请求体 + 回包」写入该 profile 的 `sync.log`，不带则不产日志；回包**已过滤** `entries[]` 条目级错误说明，`failed_items[]` 原样保留）、`--no-wait`（仅建任务不轮询）。
 
 ## 配置引导（Agent 必做，脚本不会代劳）
 
