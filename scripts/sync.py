@@ -269,7 +269,10 @@ CONFIG_TEMPLATE = {
                 "「乐享知识库」连接器时，脚本会自动获取凭证；仅未集成连接器时才需要手填"
                 "（获取：https://lexiangla.com/ai/claw）。"
                 "候选**只填 id 就够**。可选字段（都可省略，省略即取默认）："
-                "candidates[].key（文档名称，选填，随请求体 files[].key 提交；企微侧无法通过 URL 反查 doc 类型文档名称，尽量在初始化时填好）、"
+                "candidates[].key（文档名称，随请求体 files[].key 提交；doc 类型链接 "
+                "（https://doc.weixin.qq.com/doc…）必填——企微后端接口无法通过 URL 获取该类文档名称，"
+                "不填导入后会显示「未命名文档」。名称优先取自待导入文档列表（清单标题/链接锚文本），"
+                "实在拿不到再用企微连接器查询。其余类型选填；企微接口支持按 URL 反查名称后本规则删除）、"
                 "candidates[].include_subpages（默认取 source.include_subpages，后者默认 true）。",
     "auth": {
         "endpoint": "https://mcp.lexiang-app.com/mcp",
