@@ -73,7 +73,7 @@
 | `parent_entry_id` | ✅ | string | 目标**目录** entry_id（不是 space 的 root）。同样用 `scripts/sync.py resolve` 得到 |
 | `files` | ✅ | array | **非空**：传 `[]` 也报 `value is required` |
 | `files[].id` | ✅ | string | 源端标识，**填用户能拿到的链接原文**：在线文档原始 URL（含 `?scode=`）/ 微盘分享链接（含 `?k=`，服务端已接受）；`file_id`（`fi…`）与裸 docid 亦兼容但不推荐 |
-| `files[].key` | 可选 | string | **文档名称**（接口设计：`id`=链接 URL，`key`=文档名称）。Agent 生成 config 时从清单文档锚文本/标题填入；⚠️ 企微侧**无法通过 URL 反查 doc 类型文档名称**，故**尽量在初始化配置时设置好**。自由文本类字段，类型探针无法发现其存在（见 §7 适用边界） |
+| `files[].name` | 可选 | string | **文档名称**（接口设计：`id`=链接 URL，`name`=文档名称）。Agent 生成 config 时从清单文档锚文本/标题填入；⚠️ 企微侧**无法通过 URL 反查 doc 类型文档名称**，故**尽量在初始化配置时设置好**。自由文本类字段，类型探针无法发现其存在（见 §7 适用边界） |
 | `files[].include_subpages` | 可选 | bool | `true` = 连子页一起导入（智能文档每个子页落成独立子条目）。缺省取 `source.include_subpages`（默认 `true`） |
 | `dry_run` | 可选 | bool | `true` = 预演不写库（⚠️ **对 `conflict_strategy` 是盲的** —— 见下） |
 | `conflict_strategy` | 可选 | enum | `"skip"` / `"replace"` / `"keep_both"`。**脚本一律显式下发，默认 `skip`** —— 不传时服务端默认行为是破坏性的，见下 |

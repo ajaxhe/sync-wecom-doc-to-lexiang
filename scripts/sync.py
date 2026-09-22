@@ -269,7 +269,7 @@ CONFIG_TEMPLATE = {
                 "「乐享知识库」连接器时，脚本会自动获取凭证；仅未集成连接器时才需要手填"
                 "（获取：https://lexiangla.com/ai/claw）。"
                 "候选**只填 id 就够**。可选字段（都可省略，省略即取默认）："
-                "candidates[].key（文档名称，随请求体 files[].key 提交；doc 类型链接 "
+                "candidates[].name（文档名称，随请求体 files[].name 提交；doc 类型链接 "
                 "（https://doc.weixin.qq.com/doc…）必填——企微后端接口无法通过 URL 获取该类文档名称，"
                 "不填导入后会显示「未命名文档」。名称优先取自待导入文档列表（清单标题/链接锚文本），"
                 "实在拿不到再用企微连接器查询。其余类型选填；企微接口支持按 URL 反查名称后本规则删除）、"
@@ -1024,7 +1024,7 @@ def build_plan(cfg, index, lookup=None):
     files, plan = [], []
     for i, c in enumerate(cfg["candidates"], 1):
         c = c or {}
-        # key 只承载文档名称（随 files[].key 提交），绝不参与提交身份；身份永远是 id 原文
+        # name 只承载文档名称（随 files[].name 提交），绝不参与提交身份；身份永远是 id 原文
         submit_raw = str(c.get("id") or "")
         kind, label = classify_id(submit_raw)
 
@@ -1036,7 +1036,7 @@ def build_plan(cfg, index, lookup=None):
         plan.append({
             "i": i, "result": result, "submit": submit,
             "kind": kind, "label": label,
-            "key": str(c.get("key") or ""),
+            "name": str(c.get("name") or ""),
             "dst": (lookup or {}).get(k),
         })
         file_item = {
@@ -1044,8 +1044,8 @@ def build_plan(cfg, index, lookup=None):
             # 候选级缺失 → 回退全局；全局也缺失 → True（走 .get 而非 [ ]，避免调用方漏填即 KeyError）
             "include_subpages": bool(c.get("include_subpages", cfg.get("include_subpages", True))),
         }
-        if c.get("key"):
-            file_item["key"] = str(c["key"])  # 文档名称（选填，接口设计）；空值不传，避免覆盖服务端默认行为
+        if c.get("name"):
+            file_item["name"] = str(c["name"])  # 文档名称（接口参数）；空值不传，避免覆盖服务端默认行为
         files.append(file_item)
     return files, plan
 
@@ -1057,8 +1057,8 @@ def render_plan(plan):
         tips = []
         if p["label"]:
             tips.append("形态 %s" % p["label"])
-        if p["key"]:
-            tips.append(p["key"])
+        if p["name"]:
+            tips.append(p["name"])
         if tips:
             print("        └ %s" % "；".join(tips))
 

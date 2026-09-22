@@ -178,24 +178,24 @@ python3 scripts/sync.py resolve '<乐享目录链接>'            # 只读：解
 | 信息 | 怎么拿 | 注意 |
 |---|---|---|
 | ① 乐享**目标目录**链接 | 让用户从乐享页面复制（`https://<租户>.lexiangla.com/pages/<32位id>`） | **只问链接，不要问 `space_id`** —— 用 `resolve` 自动解析 |
-| ② 要同步的**企微资产**标识 | 在线文档 / 智能文档 / 表格：从企微界面复制**完整 URL**（含 `?scode=`）；微盘：复制**分享链接**（`https://drive.weixin.qq.com/s?k=…`，含 `?k=`） | 一条一个，**原样粘贴不要手改**（不要换成 docid / file_id）。**doc 类型链接（`https://doc.weixin.qq.com/doc…`）还要记下文档名称填 `key`**（见下节） |
+| ② 要同步的**企微资产**标识 | 在线文档 / 智能文档 / 表格：从企微界面复制**完整 URL**（含 `?scode=`）；微盘：复制**分享链接**（`https://drive.weixin.qq.com/s?k=…`，含 `?k=`） | 一条一个，**原样粘贴不要手改**（不要换成 docid / file_id）。**doc 类型链接（`https://doc.weixin.qq.com/doc…`）还要记下文档名称填 `name`**（见下节） |
 | ③ 冲突策略 | 默认 `skip`；只解释差异，不替用户决定 | 目标目录里若还有别的内容，`replace` 会删掉它们 |
 | ④ MCP Token | **先自动获取，问不问看条件**：Agent 宿主（WorkBuddy / CodeBuddy）已连接「乐享知识库」连接器 → `config.json` 的 `mcp_token` **留空 `""` 即可**，脚本运行时自动从宿主连接器配置（`CODEBUDDY_MCP_CONFIG`）取凭证，**不要让用户贴 token**；仅当**未集成连接器**时，才让用户从 `https://lexiangla.com/ai/claw` 取并填入 | 手填只进 config：**绝不回显、绝不写进报告**；自动凭证是会话级的，**脚本实时读取、不落盘**（定时任务等宿主不在的环境走手填） |
 
-### 🔴 doc 类型链接：必须补齐文档名称（`key` 字段）
+### 🔴 doc 类型链接：必须补齐文档名称（`name` 字段）
 
-`https://doc.weixin.qq.com/doc…` 开通的文档链接（doc 类型在线文档）**必须显式填 `key`**——
-企微后端接口**无法通过文档 URL 获取文档名称**，不填 `key` 就导入，该文档在乐享里会变成
+`https://doc.weixin.qq.com/doc…` 开通的文档链接（doc 类型在线文档）**必须显式填 `name`**——
+企微后端接口**无法通过文档 URL 获取文档名称**，不填 `name` 就导入，该文档在乐享里会变成
 **「未命名文档」**。名称获取优先级（由高到低）：
 
 1. **待导入文档列表**：用户给的清单 / 对话里出现过的标题 / 链接锚文本（首选，最省事最准）；
 2. **企微连接器**：实在拿不到时，用企微连接器的文档查询能力（文档列表 / 搜索）按 URL 对应关系取回名称。
 
 ```json
-{ "id": "https://doc.weixin.qq.com/doc/w3_…?scode=…", "key": "《文档标题》" }
+{ "id": "https://doc.weixin.qq.com/doc/w3_…?scode=…", "name": "《文档标题》" }
 ```
 
-⚠️ 这是**临时逻辑**：已向企微提需求，待其后端接口支持按 URL 反查名称后**删除本节**（`key` 回归纯选填）。
+⚠️ 这是**临时逻辑**：已向企微提需求，待其后端接口支持按 URL 反查名称后**删除本节**（`name` 回归纯选填）。
 
 ### 首次初始化（4 步）
 
@@ -216,7 +216,7 @@ python3 scripts/sync.py resolve '<用户给的乐享目录链接>'
 #                     仅未集成连接器时才填用户手贴的 token
 #    target         ← 上一步打印的那段（含 space_id / parent_entry_id）
 #    source.candidates ← 源端链接原文，一条一个 { "id": "…" }（微盘填分享链接，原样）；
-#    doc 类型链接（doc.weixin.qq.com/doc…）必须同时填 "key"（文档名称，见上节），否则导入后变「未命名文档」
+#    doc 类型链接（doc.weixin.qq.com/doc…）必须同时填 "name"（文档名称，见上节），否则导入后变「未命名文档」
 
 # ④ 校验配置（不写库）
 python3 scripts/sync.py dry-run --profile <任务名>
@@ -228,7 +228,7 @@ python3 scripts/sync.py dry-run --profile <任务名>
 
 | 用户说 | 只改哪里 | 改完必须跑 |
 |---|---|---|
-| 「再加几个文档」 | `source.candidates` **末尾追加**对象（doc 类型链接记得同时补 `key`） | `dry-run` |
+| 「再加几个文档」 | `source.candidates` **末尾追加**对象（doc 类型链接记得同时补 `name`） | `dry-run` |
 | 「换一个目标目录」 | `target` 整块（先用 `resolve` 重解析） | `dry-run`，**重点看 `add_num`**（换目录后应全是新增） |
 | 「改成覆盖 / 别覆盖」 | `source.conflict_strategy` | `dry-run` + **口头告知该档风险** |
 
@@ -272,7 +272,7 @@ profiles/
 ```
 
 > 接口**仅有**下列参数：必填 `space_id` / `type` / `files` / `parent_entry_id`；可选 `dry_run` / `conflict_strategy`；
-> `files[]` 元素有 `id`（必填，链接 URL）/ `key`（选填，文档名称，接口设计如此）/ `include_subpages`。**服务端不校验未知字段**（多余字段被静默忽略，不会报错、也不会生效）。
+> `files[]` 元素有 `id`（必填，链接 URL）/ `name`（选填，文档名称，接口设计如此）/ `include_subpages`。**服务端不校验未知字段**（多余字段被静默忽略，不会报错、也不会生效）。
 > 完整参数表与探测方法见 `references/import-api.md`。
 
 **候选字段**（**只有 `id` 必填；其余两个都可省略，省略即取默认值**）
@@ -282,18 +282,18 @@ profiles/
   - 微盘文件 → **分享链接**（`https://drive.weixin.qq.com/s?k=…`，保留 `?k=`）。服务端**已直接接受**该形态并以链接本身作为身份，**无需**换成 `file_id`；
   - ⚠️ 裸 `docid`（`w3_…` 等）与裸 `file_id`（`fi…`）**兼容但不推荐**：正常用户从企微界面拿不到，仅在沿用既有固化配置时使用。
 - 以下两个**可省略**（省略即取默认值）：
-  - `key`（默认 `""`）：**文档名称**。接口设计：`id` = 链接 URL（身份），`key` = 文档名称，脚本随请求体 `files[].key` 一并提交。
+  - `name`（默认 `""`）：**文档名称**。接口设计：`id` = 链接 URL（身份），`name` = 文档名称，脚本随请求体 `files[].name` 一并提交。
     🔴 **doc 类型链接（`https://doc.weixin.qq.com/doc…`）必填**：企微后端接口无法通过 URL 获取该类文档名称，不填导入后会显示**「未命名文档」**。名称优先取自待导入文档列表（清单标题 / 链接锚文本），实在拿不到再用企微连接器查询（见「配置引导 · doc 类型链接」一节；企微接口支持反查后该规则删除）。其余类型选填。
     提交给服务端的身份永远是 `id` 原文。
   - `include_subpages`（默认取 `source.include_subpages`，后者默认 `true`）：是否连子页一起导入。
     需要全局关掉子页时，在 `source` 下加一行 `"include_subpages": false`。
 
-**脚本构造的请求体**（不含本地字段；`files[].key` 为文档名称，选填，有值才传）：
+**脚本构造的请求体**（不含本地字段；`files[].name` 为文档名称，选填，有值才传）：
 
 ```json
 { "space_id": "<target.space_id>", "type": "wecombot",
   "parent_entry_id": "<target.parent_entry_id>",
-  "files": [{ "id": "<实际提交的 id 字符串>", "key": "<文档名称，选填，有值才传>", "include_subpages": true }],
+  "files": [{ "id": "<实际提交的 id 字符串>", "name": "<文档名称，选填，有值才传>", "include_subpages": true }],
   "dry_run": false,
   "conflict_strategy": "skip" }
 ```
