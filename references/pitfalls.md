@@ -191,6 +191,25 @@
 实测 3 条候选里 2 条命中既有（等价成功）、1 条失败 → 整任务 `status=failed`。
 **所以 `failed` ≠ 全军覆没**，要看 `failed_items` 条数与 `total_num`。
 退出码仍按方案给 `exit 1`，但文案里带「总计 N 条，其中 M 条未成功」。
+**例外（2026-09-22 用户裁决）**：未成功项全部命中 `BENIGN_FAILED_CODES`（如 `video_content_empty`，
+文件实际已导入成功、仅内容处理为空/受限）→ 按成功处理 `exit 0`。详见 §2.11。
+
+### 2.6b 任务到终态 ≠ 条目全部处理完（2026-09-21 实测 / 09-22 用户反馈修复）
+
+实测一次 12 条任务：终态 `failed` 时 2 条大文件（xlsx / docx）仍在 `entries[].status=processing`、
+服务端后台继续转存。若到终态立刻汇总输出，会把「还在处理」的条目误报成败。
+修复：`_submit_and_poll` 到终态后**等条目排空**再出报告；预算内排不掉则 `exit 1` 并打印
+「等全部处理完再跑 status 汇总」的 Agent 指令。详见 `import-api.md`「任务级终态 ≠ 条目级全部完成」。
+
+### 2.11 内容提示类失败码不是导入失败（2026-09-22 用户裁决）
+
+测试任务（WorkBuddy 读取企微文档并完成任务）实测：微盘 mp3「标准录音 1」服务端报
+`video_content_empty`（entries[].status 里 item 级 `status=failed` + `failed_reason=video_content_empty`、
+无 failed_code；failed_items[] 侧则以该 code 出现），**但文件实际已成功导入**（乐享端可见）。
+用户裁决：「音频内容是不是空」属服务端内容处理层，不是导入 skill 该管的事 → 应返回成功。
+落点：脚本常量 `BENIGN_FAILED_CODES`（code / reason 精确命中皆算）；
+渲染单列「⚠️ 已导入·内容提示」档；未成功项全为内容提示类 → `exit 0`。
+新码处置：先核实乐享端条目确实已导入，再入集合并同步 SKILL.md 与 import-api.md。
 
 ### 2.7 （📦 历史）`collect` 产出必须 ⊆ 提交白名单（P1：曾两侧不同步导致断链，已修复）
 

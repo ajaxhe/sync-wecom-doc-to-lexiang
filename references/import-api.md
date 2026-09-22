@@ -228,6 +228,12 @@ code=51 validate proto message: validation error:
 → **`failed` ≠ 全军覆没**。判定口径是 `failed_items[]` 条数 vs `total_num`，
 文案要写清「总计 N 条，其中 M 条未成功」，否则用户会误以为全部要重做。
 退出码仍按方案给 `exit 1`（有失败就是有失败，不能被「大部分成功」吞掉）。
+**唯一例外（2026-09-22 用户裁决）**：`failed_code`（或 reason）命中 `BENIGN_FAILED_CODES` 的项
+（如 `video_content_empty`）**不是导入失败** —— 文件已成功导入乐享，只是服务端内容处理
+（转写/提取）为空，属内容处理层的事，导入 skill 不该把它当失败汇报。这类项单列「⚠️ 已导入·内容提示」档、
+按成功口径统计；若任务 `failed` 的未成功项**全部**是内容提示类 → `exit 0`。
+注意 mp3 实测中该项出现在 `entries[].status`（item 级 `status=failed` + `failed_reason=video_content_empty`、
+无 failed_code），分档匹配对 code / reason **两者都查**。
 
 **④（附带）`dry_run_stats` 的计数为 0 时，服务端不回该字段。**
 
@@ -306,6 +312,20 @@ create → code:0 + task_id        （只证明任务已创建，不代表参数
 ```
 
 **轮询建议**：3s / 次，上限 60 次（=180s），超时即报 `task_id` 并 `exit 1`，**不要无限轮询**。
+
+### ⚠️ 任务级终态 ≠ 条目级全部完成（2026-09-22 实测 + 用户反馈）
+
+实测一次 12 条候选的任务：任务已到终态（`failed`），但 2 条大文件（xlsx / docx）的条目仍停在
+`entries[].status=processing`，服务端后台继续转存，稍后才 finished。
+→ 若到终态立刻汇总输出，会把「还在处理」的条目误报成败。
+
+脚本行为（`_submit_and_poll`）：
+
+1. 到任务终态后检查 `entries[]` 里是否仍有 `processing` 条目 → 有则**继续轮询等排空**（同一轮询预算内），
+   首次发现时打印仍在处理的条目清单；
+2. 排空（无任何处理中条目）→ 才输出汇总报告；
+3. 预算用尽仍有处理中 → `exit 1`，并打印**给 Agent 的显式指令**：不要立即汇总导入结果，
+   等待后重跑 `status`，直到没有处理中条目再汇总输出（`status` 命令遇处理中条目同样打印该指令）。
 
 ---
 

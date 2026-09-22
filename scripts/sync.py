@@ -55,8 +55,11 @@ MCP 调用路径（走哪条**由当前可见 tools 决定**，不遵守会让�
     ⚠️ **不传该字段时，服务端默认行为是破坏性的**（实测：一次 create 把目标目录原有 10 条条目、
        含 7 条与本批无关的，裁成本次提交的 3 条）→ 脚本**绝不省略**这个字段。详见 references/pitfalls.md §2.9。
 
-退出码：0 成功（含「已有进行中任务 → 静默退出」，供定时任务复用）；
-        1 运行期失败（鉴权失效 / 任务 failed（**含接口判「非法的 'file_id'」等形态问题**）/
+退出码：0 成功（含「已有进行中任务 → 静默退出」，供定时任务复用；
+        含任务 failed 但未成功项全部为内容提示类失败码（BENIGN_FAILED_CODES，
+        如 video_content_empty —— 文件已导入成功，仅内容处理为空/受限，2026-09-22 用户裁决））；
+        1 运行期失败（鉴权失效 / 任务 failed 且存在真失败项（**含接口判「非法的 'file_id'」等形态问题**）/
+                     任务到终态但条目排空超时（仍有条目处理中 → 输出「等全部处理完再汇总」的 Agent 指令）/
                      凭证缺失 / 目录扫描失败 / 网络异常 / 轮询超时）；
         2 用法错误（未知命令、缺参数）。
 
@@ -96,6 +99,37 @@ DEFAULT_PROFILE = "default"
 # 任务状态
 IN_PROGRESS_STATES = {"page_processing", "processing", "pending", "running"}
 FINAL_STATES = {"succeed", "failed"}
+
+# 条目级状态（entries[].status.status）：finished / failed 为条目终态，其余按「处理中」对待。
+# ⚠️ 任务级终态 ≠ 条目级全部完成：实测（2026-09-21）服务端会把仍在后台转存的大文件条目
+# 留在 processing，任务却已先到终态 → 必须**等条目全部处理完再汇总输出**（2026-09-22 用户反馈 1）。
+def _is_item_pending(entry):
+    st = (entry.get("status") or {}).get("status") or ""
+    return st in IN_PROGRESS_STATES
+
+
+def pending_entries(data):
+    """从 describe 回包里挑出仍在处理中的条目。entries 缺失/为空时返回 []（无从判断即不阻塞）。"""
+    return [e for e in (data.get("entries") or []) if _is_item_pending(e)]
+
+
+# 「文件已导入成功、仅内容处理为空/受限」类失败码 —— **不计失败**（2026-09-22 用户裁决 2）：
+# 标准录音 1.mp3 服务端报 video_content_empty，但文件实际已成功导入（乐享端可见）；
+# 「音频内容是否为空」属服务端内容处理层，不是导入 skill 该管的事 → 按成功口径汇报。
+# 注意：这是**回包结果**的分档（不影响提交什么），与不变式 0「不按候选类型分叉」不冲突。
+# code 或 reason 精确命中即算（entries[].status 里 code 常为 None、只有 reason）。
+BENIGN_FAILED_CODES = {"video_content_empty"}
+
+
+def _is_benign(code, reason):
+    return (code or "").strip() in BENIGN_FAILED_CODES or (reason or "").strip() in BENIGN_FAILED_CODES
+
+
+def split_failed_items(fails):
+    """把 failed_items[] 分成（真失败, 内容提示）。"""
+    real = [f for f in fails if not _is_benign(f.get("failed_code"), f.get("failed_reason"))]
+    benign = [f for f in fails if _is_benign(f.get("failed_code"), f.get("failed_reason"))]
+    return real, benign
 
 # 轮询上限：60 次 × 3s = 180s。超时即 exit 1，绝不无限轮询（主理人硬规格 #3）
 POLL_INTERVAL = 3
@@ -857,24 +891,36 @@ def render_entries(data):
     for e in entries:
         href = (((e.get("source") or {}).get("href")) or {})
         st = e.get("status") or {}
+        label = st.get("status", "?")
+        # 条目级 failed 但 reason 属内容提示类（如 video_content_empty）→ 文件其实已导入成功
+        if label == "failed" and _is_benign(st.get("failed_code"), st.get("failed_reason")):
+            label = "已导入·内容提示"
         extra = ("  reason=%s" % st.get("failed_reason")) if st.get("failed_reason") else ""
         print("    - [%s] %s  href.id=%s%s" % (
-            st.get("status", "?"), e.get("name", ""), href.get("id", "(none)"), extra))
+            label, e.get("name", ""), href.get("id", "(none)"), extra))
 
 
 def render_failures(data):
     """打印 `failed_items[]` —— 顶层 `err_message` 只有一句泛化文案（「导入失败，请查看失败文档」），
-    真正的原因（failed_code / failed_reason）在这个数组里。不打印它 = 用户排不了障。"""
+    真正的原因（failed_code / failed_reason）在这个数组里。不打印它 = 用户排不了障。
+    内容提示类失败码（BENIGN_FAILED_CODES，如 video_content_empty）单列 —— 文件已导入成功，不计失败。"""
     fails = data.get("failed_items") or []
     if not fails:
         return
-    print("  未成功项（failed_items）:")
-    for f in fails:
-        print("    - id=%s" % f.get("id"))
-        if f.get("name") and f.get("name") != f.get("id"):
-            print("      name=%s" % f.get("name"))
-        print("      failed_code=%s" % f.get("failed_code"))
-        print("      reason=%s" % f.get("failed_reason"))
+    real, benign = split_failed_items(fails)
+    if benign:
+        print("  ⚠️ 内容提示（文件已导入成功，不计失败）:")
+        for f in benign:
+            print("    - %s" % (f.get("name") or f.get("id")))
+            print("      failed_code=%s  reason=%s" % (f.get("failed_code"), f.get("failed_reason")))
+    if real:
+        print("  未成功项（failed_items）:")
+        for f in real:
+            print("    - id=%s" % f.get("id"))
+            if f.get("name") and f.get("name") != f.get("id"):
+                print("      name=%s" % f.get("name"))
+            print("      failed_code=%s" % f.get("failed_code"))
+            print("      reason=%s" % f.get("failed_reason"))
 
 
 def render_stats(data):
@@ -912,6 +958,8 @@ def render_report(plan, data, cfg, dry_run=False, task_id=None):
         与接口 `dry_run_stats.add_num / special_num` 同源同义 —— 报告里把接口计数
         一并打出来做交叉校验，两边不等就说明匹配索引和接口口径不一致（要查，不能糊过去）。
       · 「失败」= 接口 `failed_items[]` 的 failed_code / failed_reason。
+      · 「已导入·内容提示」= `failed_items[]` 里命中 `BENIGN_FAILED_CODES` 的项
+        （文件已导入成功，仅内容处理为空/受限，如 video_content_empty）—— 不计失败（2026-09-22 用户裁决）。
 
     ⚠️ 接口**没有**「内容有更新」这一维度：`import_describe_task` 只回
     `status / percentage / total_num / current_num`（dry-run 另回 `dry_run_stats`），
@@ -921,7 +969,7 @@ def render_report(plan, data, cfg, dry_run=False, task_id=None):
     """
     new = [p for p in plan if p["result"].startswith("NEW")]
     matched = [p for p in plan if not p["result"].startswith("NEW")]
-    fails = data.get("failed_items") or []
+    real_fails, benign_fails = split_failed_items(data.get("failed_items") or [])
     drs = data.get("dry_run_stats") if isinstance(data.get("dry_run_stats"), dict) else {}
 
     base = _base_url(cfg)
@@ -951,8 +999,13 @@ def render_report(plan, data, cfg, dry_run=False, task_id=None):
     for i, p in enumerate(matched, 1):
         line(p, i)
 
-    print("  ❌ 失败 : %d 条%s" % (len(fails), "" if fails else "（无）"))
-    for f in fails:
+    print("  ⚠️ 已导入·内容提示 : %d 条%s（文件已导入成功，不计失败）" % (len(benign_fails), "" if benign_fails else "（无）"))
+    for f in benign_fails:
+        print("    - %s" % (f.get("name") or f.get("id")))
+        print("       failed_code=%s  reason=%s" % (f.get("failed_code"), f.get("failed_reason")))
+
+    print("  ❌ 失败 : %d 条%s" % (len(real_fails), "" if real_fails else "（无）"))
+    for f in real_fails:
         print("    - %s" % (f.get("name") or f.get("id")))
         print("       failed_code=%s  reason=%s" % (f.get("failed_code"), f.get("failed_reason")))
 
@@ -1056,6 +1109,7 @@ def _submit_and_poll(ctx, cfg, files, dry_run, wait):
         return {"__task_id": task_id}, 0
 
     data = None
+    drain_announced = False
     for n in range(POLL_MAX):
         try:
             data = query_status(ctx, cfg, task_id)
@@ -1067,11 +1121,33 @@ def _submit_and_poll(ctx, cfg, files, dry_run, wait):
             print("  状态       : %s   进度 %s/%s" % (st, data.get("current_num"), data.get("total_num")))
             render_stats(data)
         if st in FINAL_STATES:
-            # 带上本次任务号：dry_run 不写缓存，报告里若只靠 read_cache 会显示上一次的任务 id
-            data["__task_id"] = task_id
-            return data, 0
+            # 任务级终态 ≠ 条目级全部完成：实测服务端会把仍在后台转存的大文件条目留在
+            # entries[].status=processing，任务却已先到终态（2026-09-21 实测 2 条大文件如此）。
+            # 2026-09-22 用户反馈：等所有条目处理完再汇总输出，不要拿部分结果交差。
+            pending = pending_entries(data)
+            if not pending:
+                # 带上本次任务号：dry_run 不写缓存，报告里若只靠 read_cache 会显示上一次的任务 id
+                data["__task_id"] = task_id
+                return data, 0
+            if not drain_announced:
+                print("  ⏳ 任务已到终态（%s），但仍有 %d 条条目在服务端处理中，继续等待：" % (st, len(pending)))
+                for e in pending:
+                    href = (((e.get("source") or {}).get("href")) or {})
+                    print("      - %s  (%s)" % (e.get("name") or href.get("id", "?"), href.get("id", "")))
+                drain_announced = True
         time.sleep(POLL_INTERVAL)
 
+    # 轮询预算用尽
+    data = data or {}
+    data["__task_id"] = task_id
+    pending = pending_entries(data) if (data.get("status") or "").strip() in FINAL_STATES else []
+    if pending:
+        print("  ⏳ 提示     : 任务已到终态，但 %d 条条目仍在服务端后台处理（大文件转存可能超过轮询预算 %ds）：" % (len(pending), POLL_MAX * POLL_INTERVAL), file=sys.stderr)
+        for e in pending:
+            print("      - %s" % (e.get("name") or "?"), file=sys.stderr)
+        print("  ⏳ 给 Agent 的指令：**不要立即汇总导入结果**。等待后重跑 `python3 scripts/sync.py status` "
+              "（每次 status 都会重打条目明细），直到没有任何条目处于处理中，再汇总输出导入任务。", file=sys.stderr)
+        return data, 1
     print("  超时       : 轮询 %d 次 × %ds 仍未到终态（task_id=%s）。请稍后用 status 查询。"
           % (POLL_MAX, POLL_INTERVAL, task_id), file=sys.stderr)
     return data, 1
@@ -1146,10 +1222,15 @@ def do_create(ctx, cfg, wait=True):
     render_failures(data)
     render_report(plan, data, cfg, dry_run=False, task_id=read_cache(ctx) or task_id)
     if (data.get("status") or "").strip() == "failed":
+        real_fails, benign_fails = split_failed_items(data.get("failed_items") or [])
+        if not real_fails:
+            # 任务状态 failed，但未成功项全是内容提示类（如 video_content_empty）→ 文件均已导入成功，按成功处理
+            print("任务状态为 failed，但全部未成功项均为内容提示类（%s）——文件均已导入成功，按成功处理，退出码 0。"
+                  % ", ".join(sorted({(f.get("failed_code") or f.get("failed_reason") or "?") for f in benign_fails})))
+            return 0
         total = data.get("total_num")
-        n_fail = len(data.get("failed_items") or [])
-        print("导入任务失败：%s（总计 %s 条，其中 %s 条未成功 —— 逐条原因见上「未成功项」）"
-              % (data.get("err_message") or "(无)", total, n_fail), file=sys.stderr)
+        print("导入任务失败：%s（总计 %s 条，其中 %d 条未成功 —— 逐条原因见上「未成功项」）"
+              % (data.get("err_message") or "(无)", total, len(real_fails)), file=sys.stderr)
         print_auth_hint()
         return 1
     return 0
@@ -1172,7 +1253,16 @@ def do_status(ctx, cfg):
     render_stats(data)
     render_entries(data)
     render_failures(data)
+    # 反馈 1（2026-09-22）：仍有条目在处理 → 显式提示 Agent 等全部处理完再汇总输出
+    pending = pending_entries(data)
+    if pending:
+        print("  ⏳ 仍有 %d 条条目在服务端处理中：不要用当前部分结果汇总输出导入任务；" % len(pending), file=sys.stderr)
+        print("     稍后再次运行本命令，直到不再出现「处理中」条目，再汇总输出。", file=sys.stderr)
     if status == "failed":
+        real_fails, _ = split_failed_items(data.get("failed_items") or [])
+        if not real_fails:
+            print("任务状态为 failed，但未成功项均为内容提示类（文件已导入成功），不计失败。", file=sys.stderr)
+            return 0
         print("导入任务失败：%s" % (data.get("err_message") or "(无)"), file=sys.stderr)
         print_auth_hint()
         return 1
