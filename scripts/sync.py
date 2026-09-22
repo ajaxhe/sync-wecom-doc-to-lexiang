@@ -11,14 +11,14 @@ sync-wecom-doc-to-lexiang —— 把企微知识库资产（在线文档 + 微�
       授权文档：https://lexiangla.com/pages/d4a717fbf4604efea4bd286fdcdac31a?company_from=906ba45e6f9a11f089c57a2a2b4bccb6
     · 乐享 MCP 凭证（二选一，**自动发现优先**，见下节）。
 
-凭证来源（优先级从高到低，2026-09-22 新增自动发现）：
+凭证来源（优先级从高到低）：
     ① config.json 的 auth.mcp_token（手填，获取：https://lexiangla.com/ai/claw）
        —— 写死在配置里，可跨会话 / 供定时任务使用；填了就优先用它。
     ② **自动发现**：mcp_token 留空时，脚本从环境变量 `CODEBUDDY_MCP_CONFIG` 里找
        Agent 宿主（WorkBuddy / CodeBuddy）已连接的「乐享知识库」连接器条目
        （mcpServers 下名字含 "lexiang" 的），直接使用它下发的本地代理 URL + 认证头
        （真实 token 由宿主的代理在上游注入，**明文 token 不落盘、不进 config、不进日志**）。
-       2026-09-22 实测：认证头 Authorization 与 X-WorkBuddy-MCP-Context 缺一不可（缺后者 401）；
+       实测：认证头 Authorization 与 X-WorkBuddy-MCP-Context 缺一不可（缺后者 401）；
        可见工具集与手填 token 完全一致（7 个元工具）。
        ⚠️ 该凭证是**会话级**的：代理端口 / context 头随宿主会话变化，脚本**每次运行时实时读取**，
           绝不缓存到 config.json —— 所以定时任务 / 宿主未运行的环境请走 ① 手填。
@@ -65,8 +65,8 @@ MCP 调用路径（走哪条**由当前可见 tools 决定**，不遵守会让�
     配置位置：`source.conflict_strategy`；也可用 `create --strategy <值>` 临时覆盖。
     ⚠️ **dry-run 对该策略是盲的** —— 不传 / replace / skip / keep_both 四路的 dry_run_stats 实测完全一致。
        所以「dry-run 报零新增」**不能**当成「真跑不会动目的端」的依据。
-    ⚠️ **不传该字段时，服务端默认行为是破坏性的**（实测：一次 create 把目标目录原有 10 条条目、
-       含 7 条与本批无关的，裁成本次提交的 3 条）→ 脚本**绝不省略**这个字段。详见 references/pitfalls.md §2.9。
+    ⚠️ **不传该字段时，服务端默认行为是破坏性的**（= replace 语义：不在本次提交集合内的
+       既有条目被删，任务却报 succeed）→ 脚本**绝不省略**这个字段。详见 references/pitfalls.md 3.4。
 
 退出码：0 成功（含「已有进行中任务 → 静默退出」，供定时任务复用）；
         1 运行期失败（鉴权失效 / 任务 failed（**含接口判「非法的 'file_id'」等形态问题**）/
@@ -77,10 +77,10 @@ MCP 调用路径（走哪条**由当前可见 tools 决定**，不遵守会让�
 🔴 四条不变式（改代码前务必先读 references/pitfalls.md）：
    0. **脚本不做任何判断逻辑** —— 不预判候选能不能导入、不按类型拦截、不因「形态不认识」而中止。
       候选**原样提交**，服务端怎么判就怎么回传；接口的**原始信息与错误**交回给 Agent 组织话术。
-      **回包侧同理（2026-09-22 用户裁决）**：接口返回成功即成功、返回失败即失败（照实报 failed_code /
+      **回包侧同理**：接口返回成功即成功、返回失败即失败（照实报 failed_code /
       failed_reason 原文）—— **不判断**文档/文件内容是否为空、不解释「这个失败其实文件已导入」、
       不给任何失败码开「其实算成功」的白名单。skill 只有三件事：引导配置 → 执行脚本 → 告知结果。
-      ⚠️ 严禁把「某类型不可导入 / 已实测 / 未实测」这类**我们的推断**写回代码（历史教训见 pitfalls.md §2.4）。
+      ⚠️ 严禁把「某类型不可导入 / 已实测 / 未实测」这类**我们的推断**写回代码（见 pitfalls.md「二、成败与失败口径」）。
       ⚠️ **免升级设计（不可违反）**：接口将来支持**新的文档类型**时，本 skill **必须不改一行就能用** ——
          用户更新 skill 是**不确定行为**，不能把「支持新类型」寄托在用户升级上。
          ⇒ 任何**按文档类型分叉**的硬编码（白名单 / 黑名单 / 类型→参数映射 / 形态禁入表）都是违规：
@@ -115,8 +115,8 @@ IN_PROGRESS_STATES = {"page_processing", "processing", "pending", "running"}
 FINAL_STATES = {"succeed", "failed"}
 
 # 条目级状态（entries[].status.status）：finished / failed 为条目终态，其余按「处理中」对待。
-# ⚠️ 任务级终态 ≠ 条目级全部完成：实测（2026-09-21）服务端会把仍在后台转存的大文件条目
-# 留在 processing，任务却已先到终态 → 必须**等条目全部处理完再汇总输出**（2026-09-22 用户反馈 1）。
+# ⚠️ 任务级终态 ≠ 条目级全部完成：服务端会把仍在后台转存的大文件条目
+# 留在 processing，任务却已先到终态 → 必须**等条目全部处理完再汇总输出**。
 def _is_item_pending(entry):
     st = (entry.get("status") or {}).get("status") or ""
     return st in IN_PROGRESS_STATES
@@ -127,14 +127,13 @@ def pending_entries(data):
     return [e for e in (data.get("entries") or []) if _is_item_pending(e)]
 
 
-# 🔴 成败口径（2026-09-22 用户裁决，最高纲领）：**接口说什么就是什么**。
-# 任务成败 = import_describe_task 的任务级 `status`；**失败文档与原因的唯一来源 = `failed_items[]`**
-# （2026-09-22 定位修正：`entries[].status` 的 failed / failed_reason **不作为失败口径** ——
-#  实测「标准录音 1.mp3」entries[].status=failed+video_content_empty，却不在 failed_items[] 里、
-#  实际导入成功；把 entries[].status 当失败口径就会误报）。
+# 🔴 成败口径（最高纲领）：**接口说什么就是什么**。
+# 任务成败 = import_describe_task 的任务级 `status`；**失败文档与原因的唯一来源 = `failed_items[]`**；
+# `entries[].status` 的 failed / failed_reason **不作为失败口径**（条目级状态即便标 failed，
+# 也可能实际已导入成功——把 entries[].status 当失败口径就会误报）。
 # `entries[]` 只用于两件事：进度展示（条目 status label）与排空等待（条目 processing 判断）。
 # **不判断**文档/文件内容是否为空、不解释「这个失败其实文件已经导入」——那是替服务端做内容判断，
-# 一律禁止（历史教训：video_content_empty 曾被分档为「已导入·内容提示」，2026-09-22 晚已裁决删除）。
+# 一律禁止（规则详见 pitfalls.md「二、成败与失败口径」）。
 
 # 轮询上限：60 次 × 3s = 180s。超时即 exit 1，绝不无限轮询（主理人硬规格 #3）
 POLL_INTERVAL = 3
@@ -166,13 +165,9 @@ class ToolPathUnavailable(RuntimeError):
 #   可见工具清单由 MCP 服务按【company / feature_flag / allowlist】动态过滤，于是
 #     ① 当前可见 tools 里**有**目标业务工具 → 直接调用；
 #     ② **没有**、但 `call_tool` 在 → **必须**经 call_tool 包装（传 tool_name + arguments）。
-# 实测与定论（2026-09-21）：
-#   `tools/list` 只回下面这 7 个元工具；直调 entry_* / import_* 回**纯文本**
-#   「tool is not allowed: <工具名>」；同一 token 下直调 whoami 正常、包装调用正常
-#   → 是**可见性**差异，不是凭证问题。
-#   **定论（乐享侧 2026-09-21 13:19 确认）**：当天后台加了参数、把大部分工具从 `tools/list`
-#   默认隐藏（agent 看不到就调不到），当日下午已放回、客户端重启后生效
-#   —— 即这是一次**服务端可回滚的开关**，既不是「平台禁止直调」，也不是本地环境差异。
+# 定论：直调业务工具被拒（纯文本「tool is not allowed: <工具名>」）而同一 token 下
+#   whoami / 包装调用正常 → 是**可见性**差异，不是凭证问题；可见集由服务端后台开关控制，
+#   随时可能变化 —— 所以路径绝不写死，每次先探。
 # ⚠️ 由此得出本脚本的设计前提：**调用路径绝不能写死**。可见集是服务端可调状态，
 #   故按官方规则**先查可见 tools 再选路径**（同一份代码自动适应两种状态），
 #   报错文案（_path_rejected）只作最后兜底。
@@ -279,7 +274,7 @@ def _mask_header(value):
 def discover_connector_auth():
     """从 Agent 宿主（WorkBuddy / CodeBuddy）的连接器配置里**自动发现**乐享 MCP 凭证。
 
-    背景（2026-09-22）：Agent 已集成「乐享知识库」连接器时，宿主通过环境变量
+    背景：Agent 已集成「乐享知识库」连接器时，宿主通过环境变量
     `CODEBUDDY_MCP_CONFIG` 向子进程下发 MCP 配置；其中 `mcpServers` 下名字含
     "lexiang" 的条目带着：
       · url     —— 宿主本地透明代理地址（真实 token 由代理在上游注入，明文不落盘）；
@@ -396,7 +391,7 @@ def norm(raw):
        href.id 形如 `…/smartpage/a1_xxx#page=<pageId>`，fragment 是身份锚点，剥了会错配；
     ④ host 小写，path / id / 剩余 query 大小写一律不改写。
 
-    🔴 **免升级设计（2026-09-21）**：本函数**不按 host / 文档类型做特判**。
+    🔴 **免升级设计**：本函数**不按 host / 文档类型做特判**。
        历史上这里有一条「微盘 `drive.weixin.qq.com/s` → 保留 `k`」的**形态特判**，
        现已由 ② 的通用规则取代（`k` 不在噪声表里 → 自动保留，输出与特判逐字节一致）。
        ⇒ **接口将来新增任何文档类型 / 新的链接形态，都不需要改这里**
@@ -432,7 +427,7 @@ def norm(raw):
 # ==========================================================================
 
 # 形态识别表 —— **只用于在报告里给人看的标签，不参与「能不能提交」的判断**。
-# 🔴 设计原则（2026-09-21 用户裁决）：本 skill **不做任何判断逻辑** ——
+# 🔴 设计原则：本 skill **不做任何判断逻辑** ——
 #   · 候选能不能导入、服务端收不收，**一律由服务端判定**；脚本只负责**原样提交**；
 #   · 脚本输出的是**接口原样返回的信息与错误**（计数 / entries / failed_items / task_id …），
 #     由 Agent 负责组织成给用户的话术；
@@ -472,27 +467,24 @@ ID_SHAPE_HINT = (
     "**形态能不能用由服务端判定** —— 脚本不预判、不拦截，原样提交并把接口回包如实返回"
 )
 
-# ⚠️ 这里**不再有**「已实测可用 / 未实测 / 不可导入 / 拒收」之类的形态分档集合。
-#    历史（2026-09-21 前）：曾有 REJECTED_KINDS（拦下、exit 1）、UNVERIFIED_KINDS（打印「未实测」）、
-#    NO_CONTENT_API_KINDS（判定「该类型不可导入」）—— **三者均已按用户裁决删除**。
-#    理由：这些是**我们的推断**，不是接口事实；写进代码就变成对服务端的预判，
+# ⚠️ 这里**不许有**「已实测可用 / 未实测 / 不可导入 / 拒收」之类的形态分档集合。
+#    理由：那些是**我们的推断**，不是接口事实；写进代码就变成对服务端的预判，
 #    既会误导用户，也会让「接口报什么就回传什么」失真。
-#    现在只做一件事：**原样提交，把接口回包与错误原样交回给 Agent**。
+#    只做一件事：**原样提交，把接口回包与错误原样交回给 Agent**。
 
 # ==========================================================================
 # 冲突处理策略（服务端字段 `conflict_strategy`）
 # ==========================================================================
-# 取值由服务端校验器实测吐出（2026-09-20）：
+# 取值（服务端校验器吐出）：
 #   conflict_strategy: value must be in list ["replace", "skip", "keep_both"]
 #
 #   skip       = 跳过已存在的（本脚本**默认**：不动目的端、不产生重复）
 #   replace    = 覆盖目的端
 #   keep_both  = 两者都保留（**会产生重复条目**）
 #
-# 🔴 实测事故记录（2026-09-20，**未传该字段**时的服务端默认行为）：
-#   一次 create 把目标目录原有 10 条条目（含 7 条与本批候选**无关**的）全部删除，
-#   重建为本次提交的 3 条 —— 即**默认行为等价于「把目标目录内容替换成本次提交的集合」**。
-#   对内容会变动 / 需要增量累积的目录，这是破坏性的。详见 references/pitfalls.md §2.9。
+# 🔴 **未传该字段**时的服务端默认行为：**把目标目录内容替换成本次提交的集合**
+#   （不在集合内的既有条目被删）。对内容会变动 / 需要增量累积的目录，这是破坏性的。
+#   详见 references/pitfalls.md 3.4。
 # 🔴 **dry-run 对该策略是盲的**：不传 / replace / skip / keep_both 四路的 dry_run_stats
 #   完全一致（实测），所以**「dry-run 报零新增」绝不能当作「真跑不会动目的端」的依据**。
 #   → 因此本脚本**一律显式传该字段**，默认 `skip`，绝不依赖服务端默认。
@@ -1002,10 +994,10 @@ def render_plan(plan):
 
 def render_entries(data):
     """打印条目明细 —— **仅进度参考，不是成败口径**。
-    🔴 entries[].status 的 failed / failed_reason **不作为失败输出**（2026-09-22 用户裁决）：
+    🔴 entries[].status 的 failed / failed_reason **不作为失败输出**：
     失败文档与原因的**唯一来源**是 `failed_items[]`（见 render_failures）。
-    实测依据：标准录音 1.mp3 的 entries[].status=failed+video_content_empty，
-    但它不在 failed_items[] 里、实际导入成功 —— 条目明细若打印 failed_reason 就会被当成失败误报。
+    条目级状态即便标 failed 也可能实际已导入成功（这样的条目不会出现在 failed_items[] 里），
+    条目明细若打印 failed_reason 就会被当成失败误报。
     所以这里只打印进度状态 label（finished/failed/processing…原样），**绝不**展开 failed_reason。"""
     entries = data.get("entries") or []
     if not entries:
@@ -1071,9 +1063,8 @@ def render_report(plan, data, cfg, dry_run=False, task_id=None):
         同时**剔除出现在 `failed_items[]` 里的条目**（按 failed_items[].id ↔ plan[].submit 对齐），
         避免同一文档既挂✅又挂❌。
       · 「失败」= **唯一来源** 接口 `failed_items[]` 的 failed_code / failed_reason，逐条原样打印。
-        🔴 接口判失败就是失败，不做任何「其实已导入」的解释（2026-09-22 用户裁决）；
-        `entries[].status` 的 failed/failed_reason **不参与**失败档（见 render_entries docstring：
-        实测标准录音 1.mp3 条目级 failed+video_content_empty 但不在 failed_items[]、实际导入成功）。
+        🔴 接口判失败就是失败，不做任何「其实已导入」的解释；
+        `entries[].status` 的 failed/failed_reason **不参与**失败档（见 render_entries docstring）。
 
     ⚠️ 接口**没有**「内容有更新」这一维度：`import_describe_task` 只回
     `status / percentage / total_num / current_num`（dry-run 另回 `dry_run_stats`），
@@ -1236,9 +1227,9 @@ def _submit_and_poll(ctx, cfg, files, dry_run, wait):
             print("  状态       : %s   进度 %s/%s" % (st, data.get("current_num"), data.get("total_num")))
             render_stats(data)
         if st in FINAL_STATES:
-            # 任务级终态 ≠ 条目级全部完成：实测服务端会把仍在后台转存的大文件条目留在
-            # entries[].status=processing，任务却已先到终态（2026-09-21 实测 2 条大文件如此）。
-            # 2026-09-22 用户反馈：等所有条目处理完再汇总输出，不要拿部分结果交差。
+            # 任务级终态 ≠ 条目级全部完成：服务端会把仍在后台转存的大文件条目留在
+            # entries[].status=processing，任务却已先到终态。
+            # 等所有条目处理完再汇总输出，不要拿部分结果交差。
             pending = pending_entries(data)
             if not pending:
                 # 带上本次任务号：dry_run 不写缓存，报告里若只靠 read_cache 会显示上一次的任务 id
@@ -1363,7 +1354,7 @@ def do_status(ctx, cfg):
     render_stats(data)
     render_entries(data)
     render_failures(data)
-    # 反馈 1（2026-09-22）：仍有条目在处理 → 显式提示 Agent 等全部处理完再汇总输出
+    # 仍有条目在处理 → 显式提示 Agent 等全部处理完再汇总输出
     pending = pending_entries(data)
     if pending:
         print("  ⏳ 仍有 %d 条条目在服务端处理中：不要用当前部分结果汇总输出导入任务；" % len(pending), file=sys.stderr)
